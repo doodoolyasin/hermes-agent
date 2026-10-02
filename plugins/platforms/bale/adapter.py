@@ -327,7 +327,7 @@ class BaleAdapter(BasePlatformAdapter):
         self._dedup = MessageDeduplicator(max_size=2048, ttl_seconds=3600.0)
 
     # -- lifecycle ---------------------------------------------------
-    async def connect(self) -> bool:
+    async def connect(self, *, is_reconnect: bool = False, **kwargs: Any) -> bool:
         if not self.token:
             self._set_fatal_error("missing_token", "BALE_BOT_TOKEN is not configured",
                                   retryable=False)
