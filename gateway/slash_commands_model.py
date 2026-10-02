@@ -476,13 +476,30 @@ class GatewayModelCommandsMixin:
             if await self._send_model_picker(event, ctx.source, adapter, ctx.session_key, listing_kwargs, _on_model_selected):
                 return None  # Picker sent — adapter handles the response
 
+        provider_name = get_label(ctx.current_provider)
+        if not provider_name or provider_name.lower() in ("unknown", "custom endpoint"):
+            if "pollinations.ai" in (ctx.current_base_url or "").lower():
+                provider_name = "Pollinations AI (رایگان / Free)"
+            elif ctx.current_base_url:
+                provider_name = f"Custom ({ctx.current_base_url})"
+            else:
+                provider_name = "Auto Free Provider"
+
         lines = [t("gateway.model.current_label", model=ctx.current_model or t("gateway.shared.unknown_value"),
-                   provider=get_label(ctx.current_provider)), ""]
+                   provider=provider_name), ""]
+        providers = []
         try:  # off-loop: listing still reads config/disk cache synchronously (#41289)
             providers = await asyncio.to_thread(list_authenticated_providers, max_models=_TEXT_LISTING_MODELS, **listing_kwargs)
             lines.extend(_model_provider_listing_lines(providers))
         except Exception:
             pass
+
+        if not providers:
+            lines.append("🔹 **مدل‌های رایگان در دسترس (Free Available Models):**")
+            lines.append("  • `openai-fast` (پیش‌فرض / پرسرعت)")
+            lines.append("  • `gpt-oss-20b` (استدلال و کدنویسی)")
+            lines.append("")
+
         lines.append(t("gateway.model.usage_switch_model"))
         lines.append(t("gateway.model.usage_switch_provider"))
         lines.append(t("gateway.model.usage_persist"))

@@ -605,6 +605,24 @@ class GatewaySlashCommandsMixin(
 
     async def _handle_help_command(self, event: MessageEvent) -> str:
         """Handle /help command - list available commands."""
+        source = getattr(event, "source", None)
+        platform_name = (source.platform.value if source and source.platform else "").lower()
+        args = event.get_command_args().strip().lower()
+        if platform_name == "bale" and args not in ("all", "full", "advanced"):
+            return (
+                "📖 **راهنمای دستورات هرمس (Hermes Agent)**\n\n"
+                "🔹 **دستورات اصلی:**\n"
+                "`/new` - شروع گفتگوی جدید و پاکسازی حافظه نشست\n"
+                "`/model` - مشاهده و تغییر مدل هوش مصنوعی فعال\n"
+                "`/status` - مشاهده وضعیت سیستم و مدل جاری\n"
+                "`/whoami` - شناسه کاربری شما در بله\n"
+                "`/help` - نمایش این راهنما\n"
+                "`/help all` - نمایش فهرست تفصیلی تمام دستورات فنی\n\n"
+                "💡 **نحوه استفاده:**\n"
+                "• هر سوال یا کدی دارید بنویسید تا پاسخ داده شود.\n"
+                "• برای تغییر مدل: `/model <نام مدل>`\n"
+                "  مثال: `/model openai-fast` یا `/model gpt-oss-20b`"
+            )
         return self._telegramized_command_reply(
             event, _execute("help", options=self._catalog_options(event)).text)
 
