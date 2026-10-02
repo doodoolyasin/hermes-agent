@@ -370,6 +370,18 @@ class PersistentTaskQueue:
             )
             return bool(cursor.rowcount)
 
+    def prune(self, retention_seconds: float = 7 * 86400.0) -> int:
+        """Prune completed, cancelled, or dead_letter tasks older than retention_seconds."""
+        cutoff = time.time() - retention_seconds
+        with _DB_LOCK, _transaction() as conn:
+            cursor = conn.execute(
+                """DELETE FROM task_queue
+                   WHERE state IN ('completed', 'cancelled', 'dead_letter')
+                     AND updated_at < ?""",
+                (cutoff,),
+            )
+            return cursor.rowcount
+
     def _row_to_task(self, row: tuple) -> QueuedTask:
         (
             task_id,
