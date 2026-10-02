@@ -81,7 +81,12 @@ class AuditLogger:
         sev = severity.upper()
         if sev not in ("INFO", "WARN", "CRITICAL"):
             sev = "INFO"
-        details_str = json.dumps(details or {}, ensure_ascii=False)
+        raw_details = json.dumps(details or {}, ensure_ascii=False)
+        try:
+            from agent.redact import redact_sensitive_text
+            details_str = redact_sensitive_text(raw_details, force=True)
+        except Exception:
+            details_str = raw_details
 
         try:
             with _DB_LOCK, _transaction() as conn:

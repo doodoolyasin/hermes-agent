@@ -497,6 +497,10 @@ class BaleAdapter(BasePlatformAdapter):
             return
 
         text = message.get("text") or message.get("caption") or ""
+        has_media = any(message.get(k) for k in ("photo", "document", "voice", "video"))
+        if not text and not has_media:
+            return  # Ignore empty or unsupported service updates
+
         if text.strip().lower() in ("/menu", "/dashboard"):
             await self.send_dashboard(str(chat_id))
             return

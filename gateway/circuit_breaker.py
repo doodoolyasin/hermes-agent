@@ -132,6 +132,11 @@ class ProviderCircuitBreaker:
         now = self._clock()
         p = provider.lower()
         err_msg = error[:500] if error else "Unspecified error"
+        try:
+            from agent.redact import redact_sensitive_text
+            err_msg = redact_sensitive_text(err_msg, force=True)
+        except Exception:
+            pass
 
         with _DB_LOCK, _transaction() as conn:
             row = conn.execute(

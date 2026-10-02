@@ -273,11 +273,19 @@ class PersistentTaskQueue:
             else:
                 next_state = TaskState.DEAD_LETTER.value
 
+            safe_error = error[:1000] if error else None
+            if safe_error:
+                try:
+                    from agent.redact import redact_sensitive_text
+                    safe_error = redact_sensitive_text(safe_error, force=True)
+                except Exception:
+                    pass
+
             conn.execute(
                 """UPDATE task_queue
                    SET state = ?, last_error = ?, updated_at = ?
                    WHERE task_id = ?""",
-                (next_state, error[:1000] if error else None, now, task_id),
+                (next_state, safe_error, now, task_id),
             )
 
     def cancel(self, task_id: str, reason: str = "") -> bool:
