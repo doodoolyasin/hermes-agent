@@ -5,6 +5,7 @@ gateway.platforms.*.
 """
 
 import re
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -101,6 +102,32 @@ class MessageEvent:
     # knows the message was meant for someone else); None means unknown and keeps the visible
     # fallback, like True.
     reply_expected: Optional[bool] = None
+    # Correlation, tracing and normalized platform event identifiers
+    request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    trace_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    correlation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    platform_event_id: Optional[str] = None
+
+    @property
+    def platform(self) -> Optional[str]:
+        """Convenience property to access platform name from source or explicit override."""
+        if hasattr(self, "_platform_override") and self._platform_override:
+            return self._platform_override
+        if self.source:
+            p = getattr(self.source, "platform", None)
+            return getattr(p, "value", p) if p else None
+        return None
+
+    @platform.setter
+    def platform(self, value: Optional[str]) -> None:
+        self._platform_override = value
+
+    @property
+    def chat_id(self) -> Optional[str]:
+        """Convenience property to access chat_id from source."""
+        if self.source:
+            return getattr(self.source, "chat_id", None)
+        return None
 
     # Process-local admission receipt, never routing metadata or execution acknowledgement.
     _gateway_accepted: bool = field(default=False, init=False, repr=False, compare=False)
@@ -142,3 +169,8 @@ class MessageEvent:
         args = parts[1] if len(parts) > 1 else ""
         # iOS auto-corrects -- to — (em dash) and - to – (en dash)
         return args.replace("\u2014\u2014", "--").replace("\u2014", "--").replace("\u2013", "-")
+
+
+# Alias according to Hermes Unified Messaging Architecture
+UnifiedMessage = MessageEvent
+UnifiedIncomingMessage = MessageEvent

@@ -237,7 +237,84 @@ def _capped_rows(items: list, render) -> list[str]:
 
 
 class GatewayStatusCommandsMixin:
-    """Read-only gateway introspection commands: /status, /context, /usage, /agents, /insights, /topup."""
+    """Read-only gateway introspection commands: /status, /diagnose, /context, /usage, /agents, /insights, /topup."""
+
+    async def _handle_diagnose_command(self, event: MessageEvent) -> str:
+        """Handle /diagnose command across Bale, Rubika, and other platforms."""
+        import os
+        import time
+        from gateway.connectivity_matrix import global_connectivity_matrix, ConnectivityStatus
+        from gateway.circuit_breaker import global_circuit_breaker
+        from gateway.provider_registry import global_provider_registry
+        from gateway.task_queue import global_task_queue
+        from gateway.delivery_ledger import list_dead_letters
+
+        # 1. Connectivity Matrix
+        try:
+            report = global_connectivity_matrix.evaluate(check_international=True, check_bale=True, check_rubika=True)
+            st_emoji = "🟢 آنلاین (ONLINE)" if report.overall_status == ConnectivityStatus.ONLINE else (
+                "🟡 نیمه‌متصل (DEGRADED)" if report.overall_status == ConnectivityStatus.DEGRADED else "🔴 آفلاین (OFFLINE)"
+            )
+            layer_lines = []
+            for name, p in report.layers.items():
+                icon = "✅" if p.status == ConnectivityStatus.ONLINE else ("⚠️" if p.status == ConnectivityStatus.DEGRADED else "❌")
+                latency = f" ({p.latency_ms}ms)" if p.latency_ms is not None else ""
+                layer_lines.append(f"  • {icon} {name}: {p.status.value}{latency}")
+        except Exception as exc:
+            st_emoji = "⚠️ نامشخص"
+            layer_lines = [f"  • خطا در ارزیابی شبکه: {exc}"]
+
+        # 2. Providers and Circuit Breakers
+        try:
+            best_p = global_provider_registry.select_best_provider()
+            best_name = f"{best_p.name} [{best_p.tier.name}]" if best_p else "نامشخص (هیچ ارائه‌دهنده فعالی یافت نشد)"
+            breakers = global_circuit_breaker.list_all()
+            cb_summary = ", ".join(f"{b['provider']}: {b['state']}" for b in breakers) if breakers else "سالم (بدون قطعی مدار)"
+        except Exception as exc:
+            best_name = "خطا در خواندن رجیستری"
+            cb_summary = str(exc)
+
+        # 3. Queues & DLQ
+        try:
+            dead_letters = list_dead_letters(limit=5)
+            task_dls = global_task_queue.list_dead_letters(limit=5)
+            dl_count = len(dead_letters)
+            task_dl_count = len(task_dls)
+        except Exception:
+            dl_count = 0
+            task_dl_count = 0
+
+        # 4. RAM
+        try:
+            import resource
+            rss_mb = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0, 1)
+        except Exception:
+            rss_mb = "N/A"
+
+        # 5. Connected adapters
+        adapters = getattr(self, "adapters", {})
+        adapters_str = ", ".join(adapters.keys()) if adapters else "هیچ پلتفرمی متصل نیست"
+
+        lines = [
+            "📊 **گزارش جامع وضعیت و عیب‌یابی سامانه (Hermes Diagnostics)**",
+            "",
+            f"🌐 **وضعیت شبکه و لایه‌های اتصال:** {st_emoji}",
+            *layer_lines,
+            "",
+            "🧠 **وضعیت هوش مصنوعی و مدل‌ها:**",
+            f"  • ارائه‌دهنده فعال: `{best_name}`",
+            f"  • وضعیت مدارشکن‌ها (Circuit Breakers): `{cb_summary}`",
+            "",
+            "📬 **صف وظایف و پایداری پیام‌ها:**",
+            f"  • پیام‌های Dead Letter: `{dl_count}`",
+            f"  • وظایف ناموفق تسک‌کیو: `{task_dl_count}`",
+            "",
+            "⚙️ **وضعیت پردازش و منابع سرور:**",
+            f"  • آداپتورهای متصل: `{adapters_str}`",
+            f"  • حافظه رم مصرفی (RSS): `{rss_mb} MB` (هدف: زیر ۸۰۰ مگابایت)",
+            f"  • شناسه پروسه (PID): `{os.getpid()}`",
+        ]
+        return "\n".join(lines)
 
     async def _handle_status_command(self, event: MessageEvent) -> str:
         """Handle /status command."""

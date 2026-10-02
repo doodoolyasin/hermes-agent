@@ -24,6 +24,7 @@ from utils import normalize_proxy_url
 from agent.i18n import t
 from agent.retry_utils import jittered_backoff
 from agent.proxy_bypass import first_proxy_env_value, should_bypass_proxy as _should_bypass_proxy
+from gateway.platforms.capabilities import PlatformCapabilities
 
 logger = logging.getLogger(__name__)
 
@@ -1965,6 +1966,7 @@ class BasePlatformAdapter(ABC):
     def __init__(self, config: PlatformConfig, platform: Platform):
         self.config = config
         self.platform = platform
+        self.capabilities: PlatformCapabilities = getattr(self, "capabilities", None) or PlatformCapabilities()
         self._message_handler: Optional[MessageHandler] = None
         self._no_message_handler_logged: bool = False
         self._reaction_handler: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None

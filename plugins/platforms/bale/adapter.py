@@ -39,6 +39,7 @@ from gateway.platforms.base import (  # noqa: E402
     MessageType,
     SendResult,
 )
+from gateway.platforms.capabilities import PlatformCapabilities  # noqa: E402
 from gateway.platforms.helpers import MessageDeduplicator  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -361,6 +362,21 @@ class BaleAdapter(BasePlatformAdapter):
             self.parse_mode = "Markdown"
 
         self.max_message_length = MAX_MESSAGE_LENGTH
+        self.capabilities = PlatformCapabilities(
+            markdown=True,
+            message_edit=True,
+            message_delete=True,
+            inline_keyboard=True,
+            callbacks=True,
+            photos=True,
+            documents=True,
+            voice=True,
+            video=True,
+            streaming=False,
+            typing_indicator=True,
+            replies=True,
+            buttons_text_fallback=True,
+        )
         self.bot_id: Optional[int] = None
         self.bot_username: Optional[str] = None
         self._offset = 0
@@ -511,6 +527,8 @@ class BaleAdapter(BasePlatformAdapter):
             message_type=msg_type,
             source=source,
             message_id=str(message.get("message_id", "")),
+            platform_event_id=str(update.get("update_id")) if update.get("update_id") else None,
+            platform_update_id=update.get("update_id"),
             raw_message=message,
             timestamp=message.get("date"),
         )

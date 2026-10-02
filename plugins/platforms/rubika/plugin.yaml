@@ -1,0 +1,32 @@
+name: rubika-platform
+label: Rubika
+kind: platform
+version: 1.0.0
+description: >-
+  First-class Rubika messenger gateway. Integrates with the Rubika Bot API
+  for inbound updates and delivers text, replies, photos, documents, voice
+  and video, with capability-aware fallbacks, token redaction, and deduplication.
+author: Hermes Agent contributors
+requires_env:
+  RUBIKA_BOT_TOKEN:
+    description: Bot token from BotFather in the Rubika app.
+    password: true
+optional_env:
+  RUBIKA_API_BASE:
+    description: Rubika Bot API base URL (default https://botapi.rubika.ir/v01).
+  RUBIKA_ALLOWED_USERS:
+    description: Comma-separated allowlist of Rubika user ids permitted to talk to the bot.
+  RUBIKA_ALLOW_ALL_USERS:
+    description: Set to 1/true to allow every Rubika user (overrides RUBIKA_ALLOWED_USERS).
+  RUBIKA_HOME_CHANNEL:
+    description: Default chat id for cron / out-of-process send_message delivery.
+  RUBIKA_HOME_CHANNEL_NAME:
+    description: Friendly name for RUBIKA_HOME_CHANNEL shown by gateway status.
+  RUBIKA_POLL_TIMEOUT:
+    description: Long-poll timeout in seconds (default 30).
+  RUBIKA_MAX_FAILURES:
+    description: Hard cap on consecutive poll failures before giving up (default 8).
+  RUBIKA_BACKOFF_BASE:
+    description: First retry backoff in seconds (default 1.0).
+  RUBIKA_BACKOFF_MAX:
+    description: Maximum retry backoff in seconds (default 60.0).

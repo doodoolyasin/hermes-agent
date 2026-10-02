@@ -19,6 +19,7 @@ import re
 import sqlite3
 import threading
 import time
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from gateway.dead_targets import classify_dead_error
@@ -307,12 +308,76 @@ def record_crash_left_reply(*, obligation_id: str, session_key: str, platform: s
              session_key, content, since))
 
 
+class DeliveryState(str, Enum):
+    """Canonical 6-state lifecycle for delivery obligations."""
+    PENDING = "pending"
+    SENDING = "attempting"       # Stored as 'attempting' for full backward compat
+    COMPLETED = "delivered"      # Stored as 'delivered' for full backward compat
+    FAILED = "failed"
+    RETRYING = "retrying"
+    DEAD_LETTER = "dead_letter"  # Interoperable with 'abandoned'
+
+
+def mark_sending(obligation_id: str) -> None:
+    """Transition obligation to 'sending' / 'attempting'."""
+    _update_state(obligation_id, "attempting")
+
+
 def mark_attempting(obligation_id: str) -> None:
     _update_state(obligation_id, "attempting")
 
 
+def mark_completed(obligation_id: str) -> None:
+    """Transition obligation to 'completed' / 'delivered'."""
+    _update_state(obligation_id, "delivered")
+
+
 def mark_delivered(obligation_id: str) -> None:
     _update_state(obligation_id, "delivered")
+
+
+def mark_retrying(obligation_id: str, error: str = "") -> None:
+    """Transition obligation to 'retrying' status."""
+    _update_state(obligation_id, "retrying", error=error)
+
+
+def mark_dead_letter(obligation_id: str, error: str = "") -> None:
+    """Move obligation to dead_letter queue."""
+    _update_state(obligation_id, "dead_letter", error=error)
+
+
+def list_dead_letters(limit: int = 50) -> List[Dict[str, Any]]:
+    """List obligations in dead_letter or abandoned state for administrator inspection."""
+    with _DB_LOCK, _transaction() as conn:
+        cursor = conn.execute(
+            """SELECT obligation_id, session_key, platform, chat_id, thread_id,
+                      content, state, attempts, created_at, updated_at, last_error
+               FROM delivery_obligations
+               WHERE state IN ('dead_letter', 'abandoned')
+               ORDER BY updated_at DESC LIMIT ?""", (max(1, int(limit)),)
+        )
+        return [
+            {
+                "obligation_id": r[0], "session_key": r[1], "platform": r[2],
+                "chat_id": r[3], "thread_id": r[4], "content": r[5],
+                "state": r[6], "attempts": r[7], "created_at": r[8],
+                "updated_at": r[9], "last_error": r[10]
+            }
+            for r in cursor.fetchall()
+        ]
+
+
+def replay_dead_letter(obligation_id: str) -> bool:
+    """Replay a dead letter obligation by resetting state to pending and attempts to 0."""
+    now = time.time()
+    with _DB_LOCK, _transaction() as conn:
+        cursor = conn.execute(
+            """UPDATE delivery_obligations
+               SET state='pending', attempts=0, updated_at=?, last_error=NULL
+               WHERE obligation_id=? AND state IN ('dead_letter', 'abandoned')""",
+            (now, obligation_id)
+        )
+        return bool(cursor.rowcount)
 
 
 def mark_failed(obligation_id: str, error: str = "") -> None:
@@ -393,16 +458,16 @@ def sweep_recoverable(now: Optional[float] = None, *, deliverable_platforms: Opt
                       content, state, attempts, created_at,
                       owner_pid, owner_started_at, adapter_profile, last_error, updated_at
                FROM delivery_obligations
-               WHERE state IN ('pending', 'attempting', 'failed')"""
+               WHERE state IN ('pending', 'attempting', 'sending', 'failed', 'retrying')"""
         ).fetchall()
         for (oid, session_key, platform, chat_id, thread_id, content, state, attempts, created_at,
              owner_pid, owner_started_at, adapter_profile, last_error, updated_at) in rows:
             if _owner_alive(owner_pid, owner_started_at):
                 continue  # a live gateway still owns this row
-            if attempts >= MAX_ATTEMPTS or (now - created_at) > STALE_AFTER_SECONDS:  # exhausted -> abandoned
+            if attempts >= MAX_ATTEMPTS or (now - created_at) > STALE_AFTER_SECONDS:  # exhausted -> dead_letter
                 conn.execute(
                     """UPDATE delivery_obligations
-                       SET state='abandoned', updated_at=? WHERE obligation_id=?""", (now, oid))
+                       SET state='dead_letter', updated_at=? WHERE obligation_id=?""", (now, oid))
                 continue
             if ((deliverable_platforms is not None and platform not in deliverable_platforms)
                     or (deliverable_targets is not None and (platform, adapter_profile) not in deliverable_targets)):
@@ -538,7 +603,7 @@ def _prune_unlocked(conn, now: float) -> None:
     """Retention DELETEs on the caller's open connection — must run inside the caller's transaction."""
     conn.execute(
         """DELETE FROM delivery_obligations
-           WHERE state IN ('delivered', 'abandoned') AND updated_at < ?""", (now - _RETENTION_SECONDS,))
+           WHERE state IN ('delivered', 'abandoned', 'dead_letter') AND updated_at < ?""", (now - _RETENTION_SECONDS,))
     total = conn.execute("SELECT COUNT(*) FROM delivery_obligations").fetchone()[0]
     if total > _MAX_ROWS:
         conn.execute(

@@ -808,3 +808,32 @@ class TestOwnerAlivePidProbe:
 
         monkeypatch.setattr(status, "_pid_exists", boom)
         assert dl._owner_alive(12345, 999) is False
+
+
+class TestDeliveryStateTransitionsAndDLQ:
+    """Validate 6-state lifecycle, dead letter queueing and replay."""
+
+    def test_state_transitions_and_dlq_replay(self):
+        _record(oid="dlq-1", content="DLQ Test")
+        assert _row("dlq-1")["state"] == "pending"
+
+        dl.mark_sending("dlq-1")
+        assert _row("dlq-1")["state"] == "attempting"
+
+        dl.mark_retrying("dlq-1", "network blip")
+        assert _row("dlq-1")["state"] == "retrying"
+
+        dl.mark_dead_letter("dlq-1", "permanent fail")
+        assert _row("dlq-1")["state"] == "dead_letter"
+
+        # List dead letters
+        dls = dl.list_dead_letters()
+        assert any(x["obligation_id"] == "dlq-1" for x in dls)
+
+        # Replay dead letter
+        assert dl.replay_dead_letter("dlq-1") is True
+        assert _row("dlq-1")["state"] == "pending"
+
+        # Final delivery
+        dl.mark_completed("dlq-1")
+        assert _row("dlq-1")["state"] == "delivered"
