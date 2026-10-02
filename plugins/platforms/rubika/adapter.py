@@ -358,8 +358,10 @@ class RubikaAdapter(BasePlatformAdapter):
 
     async def send_document(self, chat_id: str, file_path: str, caption: Optional[str] = None,
                             reply_to: Optional[str] = None, **kwargs: Any) -> SendResult:
-        if not self._client or not os.path.exists(file_path):
+        if not self._client or not os.path.isfile(file_path):
             return SendResult(success=False, error="Client not connected or file not found")
+        if os.path.getsize(file_path) > 50 * 1024 * 1024:
+            return SendResult(success=False, error="File size exceeds maximum upload limit of 50MB")
         try:
             with open(file_path, "rb") as f:
                 data = f.read()

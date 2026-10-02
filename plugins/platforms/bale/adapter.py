@@ -265,6 +265,8 @@ class BaleClient:
 
     async def send_photo(self, chat_id: Any, photo: str, caption: Optional[str] = None,
                          reply_to_message_id: Optional[int] = None) -> dict:
+        if os.path.exists(photo):
+            return await self._send_file("sendPhoto", "photo", chat_id, photo, caption, reply_to_message_id)
         payload: dict = {"chat_id": chat_id, "photo": photo}
         if caption:
             payload["caption"] = caption
@@ -275,6 +277,12 @@ class BaleClient:
     async def _send_file(self, method: str, field: str, chat_id: Any, path: str,
                          caption: Optional[str] = None,
                          reply_to_message_id: Optional[int] = None) -> dict:
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"Media file not found: {path}")
+        size = os.path.getsize(path)
+        if size > 50 * 1024 * 1024:
+            raise ValueError(f"File size {size} bytes exceeds maximum upload limit of 50MB")
+
         data: dict = {"chat_id": chat_id}
         if caption:
             data["caption"] = caption
@@ -435,15 +443,10 @@ class BaleAdapter(BasePlatformAdapter):
                 updates = await self._client.get_updates(self._offset, self.poll_timeout)
             except BaleAPIError as exc:
                 if exc.fatal:
-                    self._set_fatal_error("auth", f"Bale auth failure: {exc.description}")
+                    self._set_fatal_error("auth", f"Bale auth failure: {exc.description}", retryable=False)
                     self._running = False
                     break
-                if not exc.retryable or attempt + 1 >= self.max_attempts:
-                    logger.error("Bale polling giving up after %d attempts: %s",
-                                 attempt + 1, exc.description)
-                    self._running = False
-                    break
-                delay = exc.retry_after or _backoff(attempt, self.backoff_base, self.backoff_max)
+                delay = exc.retry_after or _backoff(min(attempt, self.max_attempts), self.backoff_base, self.backoff_max)
                 logger.warning("Bale poll error (attempt %d): %s — retrying in %.1fs",
                                attempt + 1, exc.description, delay)
                 attempt += 1
@@ -452,11 +455,10 @@ class BaleAdapter(BasePlatformAdapter):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - unexpected, bounded retry
-                if attempt + 1 >= self.max_attempts:
-                    logger.error("Bale polling giving up: %s", exc)
-                    self._running = False
-                    break
-                await asyncio.sleep(_backoff(attempt, self.backoff_base, self.backoff_max))
+                delay = _backoff(min(attempt, self.max_attempts), self.backoff_base, self.backoff_max)
+                logger.warning("Bale unexpected poll exception (attempt %d): %s — retrying in %.1fs",
+                               attempt + 1, exc, delay)
+                await asyncio.sleep(delay)
                 attempt += 1
                 continue
 
