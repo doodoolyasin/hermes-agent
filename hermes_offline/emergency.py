@@ -344,6 +344,7 @@ def prepare(specs: List[Dict[str, Any]], *, dry_run: bool = False, allow_network
                     except OSError:
                         rec.disk_usage_gb = 0.0
                     reg.add_discovered(rec, replace=True)
+                    _persist(reg)
             else:
                 report.failed.append({"name": name, "state": state, "error": getattr(result, "error", "")})
         except Exception as exc:  # a single bad spec must not abort the pack
