@@ -1,8 +1,9 @@
 """Automatic discovery and fallback for free AI providers (public & local).
 
 Enabled by default. Probes known local runtimes (Ollama, LM Studio, vLLM)
-and public free OpenAI-compatible endpoints (e.g. Pollinations AI) to ensure
-Hermes works out of the box even without pre-configured API credentials.
+and public free OpenAI-compatible endpoints (Pollinations AI primary and mirrors)
+to ensure Hermes works out of the box even without pre-configured API credentials,
+and provides a resilient multi-tier fallback ladder during network restrictions or outages.
 """
 
 from __future__ import annotations
@@ -16,9 +17,10 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# List of known free endpoints to probe in order of priority:
-# 1. Local endpoints (fastest, private)
-# 2. Public free OpenAI-compatible endpoints
+# Multi-tiered candidate list:
+# Tier 1: Local runtimes (fastest, private, zero-cost, offline-proof)
+# Tier 2: Public free OpenAI-compatible endpoints (Pollinations fast, reasoning, general)
+# Tier 3: Secondary mirrors for essential times & censorship resilience
 FREE_CANDIDATES: List[Dict[str, Any]] = [
     {
         "name": "Local Ollama",
@@ -48,10 +50,37 @@ FREE_CANDIDATES: List[Dict[str, Any]] = [
         "default_model": "default",
     },
     {
-        "name": "Pollinations AI (Free Public)",
+        "name": "Pollinations AI (Fast Free)",
         "provider": "custom",
         "base_url": "https://text.pollinations.ai/openai",
         "probe_url": "https://text.pollinations.ai/openai/models",
+        "api_key": "free-community",
+        "model_finder": lambda data: "openai-fast",
+        "default_model": "openai-fast",
+    },
+    {
+        "name": "Pollinations AI (Reasoning & Code)",
+        "provider": "custom",
+        "base_url": "https://text.pollinations.ai/openai",
+        "probe_url": "https://text.pollinations.ai/openai/models",
+        "api_key": "free-community",
+        "model_finder": lambda data: "gpt-oss-20b",
+        "default_model": "gpt-oss-20b",
+    },
+    {
+        "name": "Pollinations AI (General)",
+        "provider": "custom",
+        "base_url": "https://text.pollinations.ai/openai",
+        "probe_url": "https://text.pollinations.ai/openai/models",
+        "api_key": "free-community",
+        "model_finder": lambda data: "openai",
+        "default_model": "openai",
+    },
+    {
+        "name": "Pollinations AI (Mirror)",
+        "provider": "custom",
+        "base_url": "https://genai.pollinations.ai/openai",
+        "probe_url": "https://genai.pollinations.ai/openai/models",
         "api_key": "free-community",
         "model_finder": lambda data: "openai-fast",
         "default_model": "openai-fast",
@@ -78,6 +107,40 @@ def probe_endpoint(probe_url: str, timeout: float = 2.0) -> Optional[dict]:
     return None
 
 
+def get_free_models_catalog() -> List[Dict[str, Any]]:
+    """Return catalog of available free models for interactive model picker."""
+    return [
+        {
+            "id": "openai-fast",
+            "name": "⚡ openai-fast (سریع و هوشمند)",
+            "provider": "custom",
+            "base_url": "https://text.pollinations.ai/openai",
+            "description": "مدل سریع و رایگان برای کارهای روزمره و چت",
+        },
+        {
+            "id": "gpt-oss-20b",
+            "name": "🧠 gpt-oss-20b (استدلال و برنامه‌نویسی)",
+            "provider": "custom",
+            "base_url": "https://text.pollinations.ai/openai",
+            "description": "مدل متن‌باز قدرتمند با توانایی استدلال بالا",
+        },
+        {
+            "id": "openai",
+            "name": "🌐 openai (مدل عمومی)",
+            "provider": "custom",
+            "base_url": "https://text.pollinations.ai/openai",
+            "description": "مدل عمومی استاندارد جهت گفتگو و پرسش‌وپاسخ",
+        },
+        {
+            "id": "deepseek",
+            "name": "🔍 deepseek (دیپ‌سیک)",
+            "provider": "custom",
+            "base_url": "https://text.pollinations.ai/openai",
+            "description": "مدل چت هوشمند دیپ‌سیک",
+        },
+    ]
+
+
 def discover_free_provider(config: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """Probe candidate free providers and return first working one."""
     cfg = config or {}
@@ -85,7 +148,7 @@ def discover_free_provider(config: Optional[Dict[str, Any]] = None) -> Optional[
     if free_cfg.get("enabled") is False or free_cfg.get("auto_discover") is False:
         return None
 
-    # Custom candidate endpoints from user config can take precedence
+    # Custom candidate endpoints from user config take precedence
     custom_candidates = free_cfg.get("candidates") or []
     all_candidates = custom_candidates + FREE_CANDIDATES
 

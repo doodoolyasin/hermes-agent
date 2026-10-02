@@ -1358,6 +1358,27 @@ def list_picker_providers(
         is_custom_endpoint = bool(p.get("is_user_defined")) and bool(p.get("api_url"))
         if p.get("models") or is_custom_endpoint:
             filtered.append(p)
+
+    # Always ensure Free AI models are accessible in the picker
+    try:
+        from hermes_cli.free_provider_discovery import get_free_models_catalog
+        free_models = [m["id"] for m in get_free_models_catalog()]
+        if not any(x.get("slug") == "free_ai" for x in filtered):
+            free_prov = {
+                "name": "سرویس‌های رایگان (Free AI)",
+                "slug": "custom",
+                "models": free_models,
+                "total_models": len(free_models),
+                "is_current": (current_provider in ("", "custom") and current_model in free_models),
+                "api_url": "https://text.pollinations.ai/openai",
+            }
+            if not filtered:
+                filtered.append(free_prov)
+            else:
+                filtered.insert(0, free_prov)
+    except Exception:
+        pass
+
     from hermes_cli.models_validate import drop_unofferable_model_ids
 
     drop_unofferable_model_ids(filtered)

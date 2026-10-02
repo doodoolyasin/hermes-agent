@@ -909,6 +909,10 @@ class GatewayInboundMixin:
 
     async def _hm_cmd_start(self, event, source, _quick_key):
         logger.info("Handling /start platform ping for session %s", _quick_key)
+        delivery_adapter = getattr(self, "_delivery_adapter_for", lambda s: None)(source)
+        if delivery_adapter is not None and getattr(delivery_adapter, "send_dashboard", None) is not None:
+            await delivery_adapter.send_dashboard(source.chat_id)
+            return True, ""
         welcome = (
             "سلام! من هرمس (Hermes Agent) هستم، دستیار هوشمند شما 🤖\n\n"
             "می‌توانید هر سوال، دستور یا کدی دارید بفرستید تا برایتان انجام دهم.\n\n"

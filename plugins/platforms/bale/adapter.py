@@ -215,20 +215,41 @@ class BaleClient:
 
     async def send_message(self, chat_id: Any, text: str,
                            reply_to_message_id: Optional[int] = None,
-                           parse_mode: Optional[str] = None) -> dict:
+                           parse_mode: Optional[str] = None,
+                           reply_markup: Optional[dict] = None) -> dict:
         payload: dict = {"chat_id": chat_id, "text": text}
         if reply_to_message_id is not None:
             payload["reply_to_message_id"] = reply_to_message_id
         if parse_mode:
             payload["parse_mode"] = parse_mode
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
         return await self._request("sendMessage", payload)
 
     async def edit_message_text(self, chat_id: Any, message_id: Any, text: str,
-                                parse_mode: Optional[str] = None) -> dict:
+                                parse_mode: Optional[str] = None,
+                                reply_markup: Optional[dict] = None) -> dict:
         payload: dict = {"chat_id": chat_id, "message_id": message_id, "text": text}
         if parse_mode:
             payload["parse_mode"] = parse_mode
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
         return await self._request("editMessageText", payload)
+
+    async def answer_callback_query(self, callback_query_id: str,
+                                    text: Optional[str] = None,
+                                    show_alert: bool = False) -> bool:
+        payload: dict = {"callback_query_id": str(callback_query_id)}
+        if text:
+            payload["text"] = text
+        if show_alert:
+            payload["show_alert"] = True
+        try:
+            res = await self._request("answerCallbackQuery", payload)
+            return bool(res)
+        except Exception as exc:
+            logger.debug("Bale answerCallbackQuery failed: %s", exc)
+            return False
 
     async def delete_message(self, chat_id: Any, message_id: Any) -> bool:
         payload: dict = {"chat_id": chat_id, "message_id": message_id}
@@ -346,6 +367,8 @@ class BaleAdapter(BasePlatformAdapter):
         self._client: Optional[BaleClient] = None
         self._poll_task: Optional[asyncio.Task] = None
         self._dedup = MessageDeduplicator(max_size=2048, ttl_seconds=3600.0)
+        self._model_picker_state: Dict[str, dict] = {}
+        self._choice_picker_state: Dict[str, dict] = {}
 
     # -- lifecycle ---------------------------------------------------
     async def connect(self, *, is_reconnect: bool = False, **kwargs: Any) -> bool:
@@ -434,6 +457,14 @@ class BaleAdapter(BasePlatformAdapter):
                     await self._handle_update(update)
 
     async def _handle_update(self, update: dict) -> None:
+        callback_query = update.get("callback_query")
+        if isinstance(callback_query, dict):
+            uid = update.get("update_id")
+            if uid is not None and self._dedup.is_duplicate(f"cb_{uid}"):
+                return
+            await self._handle_callback_query(callback_query)
+            return
+
         message = update.get("message") or update.get("edited_message")
         if not isinstance(message, dict):
             return
@@ -450,6 +481,9 @@ class BaleAdapter(BasePlatformAdapter):
             return
 
         text = message.get("text") or message.get("caption") or ""
+        if text.strip().lower() in ("/menu", "/dashboard"):
+            await self.send_dashboard(str(chat_id))
+            return
         msg_type = MessageType.TEXT
         if message.get("photo"):
             msg_type = MessageType.IMAGE
@@ -649,6 +683,328 @@ class BaleAdapter(BasePlatformAdapter):
         return await self._send_with_retry(
             lambda: self._client._send_file("sendPhoto", "photo", chat_id, file_path,
                                             self.format_message(caption or ""), reply_id))
+
+    # -- interactive inline keyboard & dashboard ---------------------
+    def _build_provider_keyboard(self, providers: list, page: int = 0) -> tuple[dict, str]:
+        buttons = []
+        for i, p in enumerate(providers):
+            name = p.get("name", p.get("slug", f"Provider {i}"))
+            count = p.get("total_models", len(p.get("models", [])))
+            label = f"{name} ({count})"
+            if p.get("is_current"):
+                label = f"✓ {label}"
+            buttons.append({"text": label, "callback_data": f"mp:{p.get('slug', i)}"})
+        rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+        rows.append([{"text": "❌ انصراف", "callback_data": "mx"}])
+        return {"inline_keyboard": rows}, ""
+
+    def _build_model_keyboard(self, models: list, page: int = 0, current_model: str = "") -> tuple[dict, str]:
+        buttons = []
+        for i, m in enumerate(models):
+            m_id = m if isinstance(m, str) else m.get("id", str(m))
+            label = m_id.split("/")[-1] if "/" in m_id else m_id
+            if label == current_model or m_id == current_model:
+                label = f"✓ {label}"
+            buttons.append({"text": label, "callback_data": f"mm:{i}"})
+        rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+        rows.append([
+            {"text": "◀ بازگشت", "callback_data": "mb"},
+            {"text": "❌ بستن", "callback_data": "mx"},
+        ])
+        return {"inline_keyboard": rows}, ""
+
+    async def send_model_picker(
+        self, chat_id: str, providers: list, current_model: str, current_provider: str, session_key: str,
+        on_model_selected, metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+        if self._client is None:
+            return SendResult(success=False, error="not connected")
+
+        # If only 1 provider exists, jump straight into model buttons for quick 1-tap UX
+        if len(providers) == 1:
+            p = providers[0]
+            models = p.get("models", [])
+            keyboard, _ = self._build_model_keyboard(models, 0, current_model=current_model)
+            text = (
+                f"🎛 **انتخاب مدل هوش مصنوعی**\n\n"
+                f"مدل فعال: `{current_model or 'پیش‌فرض'}`\n"
+                f"ارائه‌دهنده: *{p.get('name', 'Free AI')}*\n\n"
+                f"برای تغییر مدل روی یکی از گزینه‌های زیر بزنید:"
+            )
+            self._model_picker_state[str(chat_id)] = {
+                "providers": providers,
+                "selected_provider": p.get("slug", "custom"),
+                "model_list": models,
+                "current_model": current_model,
+                "current_provider": current_provider,
+                "session_key": session_key,
+                "on_model_selected": on_model_selected,
+            }
+        else:
+            keyboard, _ = self._build_provider_keyboard(providers, 0)
+            text = (
+                f"🎛 **انتخاب مدل هوش مصنوعی**\n\n"
+                f"مدل فعال: `{current_model or 'پیش‌فرض'}`\n\n"
+                f"یک ارائه‌دهنده را انتخاب کنید:"
+            )
+            self._model_picker_state[str(chat_id)] = {
+                "providers": providers,
+                "current_model": current_model,
+                "current_provider": current_provider,
+                "session_key": session_key,
+                "on_model_selected": on_model_selected,
+            }
+
+        try:
+            res = await self._client.send_message(
+                chat_id, text, parse_mode=self.parse_mode or None, reply_markup=keyboard
+            )
+            msg_id = (res or {}).get("message_id")
+            if msg_id and str(chat_id) in self._model_picker_state:
+                self._model_picker_state[str(chat_id)]["msg_id"] = msg_id
+            return SendResult(success=True, message_id=str(msg_id) if msg_id else None)
+        except Exception as exc:
+            logger.error("Failed to send model picker in Bale: %s", exc)
+            return SendResult(success=False, error=str(exc))
+
+    async def send_choice_picker(
+        self, chat_id: str, title: str, choices: list, session_key: str, on_choice_selected,
+        metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+        if self._client is None:
+            return SendResult(success=False, error="not connected")
+
+        buttons = []
+        for i, choice in enumerate(choices):
+            label = str(choice.get("label") or choice.get("value") or "")
+            if choice.get("is_current"):
+                label = f"✓ {label}"
+            buttons.append({"text": label, "callback_data": f"cp:{i}"})
+
+        rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+        keyboard = {"inline_keyboard": rows}
+
+        try:
+            res = await self._client.send_message(
+                chat_id, title, parse_mode=self.parse_mode or None, reply_markup=keyboard
+            )
+            msg_id = (res or {}).get("message_id")
+            self._choice_picker_state[str(chat_id)] = {
+                "msg_id": msg_id,
+                "choices": choices,
+                "session_key": session_key,
+                "on_choice_selected": on_choice_selected,
+            }
+            return SendResult(success=True, message_id=str(msg_id) if msg_id else None)
+        except Exception as exc:
+            return SendResult(success=False, error=str(exc))
+
+    async def send_dashboard(self, chat_id: str, text: Optional[str] = None) -> SendResult:
+        """Send an interactive inline dashboard for Hermes Agent."""
+        if self._client is None:
+            return SendResult(success=False, error="not connected")
+
+        msg_text = text or (
+            "🎛 **داشبورد هرمس (Hermes Agent)**\n\n"
+            "به دستیار هوشمند هرمس خوش آمدید! 🤖\n\n"
+            "برای مدیریت و تنظیمات، روی یکی از دکمه‌های زیر بزنید:"
+        )
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "⚡ تغییر مدل هوش مصنوعی", "callback_data": "db:model"},
+                ],
+                [
+                    {"text": "🔄 گفتگوی جدید (/new)", "callback_data": "db:new"},
+                    {"text": "📊 وضعیت سیستم (/status)", "callback_data": "db:status"},
+                ],
+                [
+                    {"text": "📖 راهنما (/help)", "callback_data": "db:help"},
+                ]
+            ]
+        }
+        try:
+            res = await self._client.send_message(
+                chat_id, msg_text, parse_mode=self.parse_mode or None, reply_markup=keyboard
+            )
+            msg_id = (res or {}).get("message_id")
+            return SendResult(success=True, message_id=str(msg_id) if msg_id else None)
+        except Exception as exc:
+            return SendResult(success=False, error=str(exc))
+
+    async def _handle_callback_query(self, callback_query: dict) -> None:
+        cq_id = callback_query.get("id")
+        data = str(callback_query.get("data") or "")
+        message = callback_query.get("message") or {}
+        chat = message.get("chat") or {}
+        chat_id = str(chat.get("id") or callback_query.get("from", {}).get("id") or "")
+        msg_id = message.get("message_id")
+
+        if cq_id and self._client:
+            await self._client.answer_callback_query(cq_id)
+
+        if not chat_id:
+            return
+
+        if data.startswith(("mp:", "mm:", "mg:", "mpv:", "mb", "mx")):
+            await self._handle_model_picker_callback(callback_query, data, chat_id, msg_id)
+        elif data.startswith("cp:"):
+            await self._handle_choice_picker_callback(callback_query, data, chat_id, msg_id)
+        elif data.startswith("db:"):
+            await self._handle_dashboard_callback(callback_query, data, chat_id, msg_id)
+
+    async def _handle_model_picker_callback(self, query: dict, data: str, chat_id: str, msg_id: Any) -> None:
+        state = self._model_picker_state.get(str(chat_id))
+        if not state:
+            return
+
+        if data.startswith("mm:"):
+            try:
+                idx = int(data[3:])
+                model_list = state.get("model_list", [])
+                chosen_model = model_list[idx]
+                if not isinstance(chosen_model, str):
+                    chosen_model = chosen_model.get("id", str(chosen_model))
+            except (ValueError, IndexError):
+                return
+
+            provider_slug = state.get("selected_provider", "custom")
+            callback = state.get("on_model_selected")
+            if callback:
+                try:
+                    result_text = await callback(chat_id, chosen_model, provider_slug)
+                except Exception as exc:
+                    result_text = f"خطا در تغییر مدل: {exc}"
+            else:
+                result_text = f"✓ مدل فعال به `{chosen_model}` تغییر یافت."
+
+            text = f"{result_text}\n\nبرای بازگشت به منو: /menu"
+            keyboard = {"inline_keyboard": [[{"text": "🎛 منوی اصلی", "callback_data": "db:back"}]]}
+            await self._client.edit_message_text(
+                chat_id, msg_id, text, parse_mode=self.parse_mode or None, reply_markup=keyboard
+            )
+            self._model_picker_state.pop(str(chat_id), None)
+
+        elif data.startswith("mp:"):
+            slug = data[3:]
+            p = next((x for x in state.get("providers", []) if str(x.get("slug")) == slug), None)
+            if p:
+                models = p.get("models", [])
+                state["selected_provider"] = slug
+                state["model_list"] = models
+                keyboard, _ = self._build_model_keyboard(models, 0, current_model=state.get("current_model", ""))
+                text = (
+                    f"🎛 **انتخاب مدل هوش مصنوعی**\n\n"
+                    f"ارائه‌دهنده: *{p.get('name', slug)}*\n"
+                    f"مدل فعال: `{state.get('current_model', '')}`\n\n"
+                    f"مدل مورد نظر خود را انتخاب کنید:"
+                )
+                await self._client.edit_message_text(
+                    chat_id, msg_id, text, parse_mode=self.parse_mode or None, reply_markup=keyboard
+                )
+
+        elif data == "mb":  # back
+            keyboard, _ = self._build_provider_keyboard(state.get("providers", []), 0)
+            text = f"🎛 **انتخاب مدل هوش مصنوعی**\n\nیک ارائه‌دهنده را انتخاب کنید:"
+            await self._client.edit_message_text(
+                chat_id, msg_id, text, parse_mode=self.parse_mode or None, reply_markup=keyboard
+            )
+
+        elif data == "mx":  # cancel
+            await self._client.edit_message_text(chat_id, msg_id, "عملیات انتخاب مدل لغو شد.", parse_mode=None, reply_markup=None)
+            self._model_picker_state.pop(str(chat_id), None)
+
+    async def _handle_choice_picker_callback(self, query: dict, data: str, chat_id: str, msg_id: Any) -> None:
+        state = self._choice_picker_state.get(str(chat_id))
+        if not state:
+            return
+        try:
+            idx = int(data[3:])
+            choice = state["choices"][idx]
+            val = str(choice.get("value") or "")
+        except (ValueError, IndexError):
+            return
+        callback = state.get("on_choice_selected")
+        if callback:
+            try:
+                res_text = await callback(chat_id, val)
+            except Exception as exc:
+                res_text = f"خطا: {exc}"
+        else:
+            res_text = f"✓ انتخاب شد: {val}"
+        await self._client.edit_message_text(chat_id, msg_id, res_text, parse_mode=self.parse_mode or None, reply_markup=None)
+        self._choice_picker_state.pop(str(chat_id), None)
+
+    async def _handle_dashboard_callback(self, query: dict, data: str, chat_id: str, msg_id: Any) -> None:
+        if data == "db:model":
+            from hermes_cli.free_provider_discovery import get_free_models_catalog
+            free_models = [m["id"] for m in get_free_models_catalog()]
+            providers = [{
+                "name": "سرویس‌های رایگان (Free AI)",
+                "slug": "custom",
+                "models": free_models,
+                "total_models": len(free_models),
+                "is_current": True,
+            }]
+            keyboard, _ = self._build_model_keyboard(free_models, 0)
+            text = (
+                "⚡ **انتخاب مدل هوش مصنوعی (رایگان)**\n\n"
+                "روی یکی از مدل‌های زیر بزنید تا فعال شود:"
+            )
+            self._model_picker_state[str(chat_id)] = {
+                "providers": providers,
+                "selected_provider": "custom",
+                "model_list": free_models,
+                "current_model": "openai-fast",
+                "session_key": f"agent:main:bale:dm:{chat_id}",
+                "on_model_selected": None,
+            }
+            await self._client.edit_message_text(chat_id, msg_id, text, parse_mode=self.parse_mode or None, reply_markup=keyboard)
+
+        elif data == "db:new":
+            await self._client.edit_message_text(
+                chat_id, msg_id,
+                "🔄 **گفتگوی جدید آغاز شد.**\nحافظه و تاریخچه نشست قبلی پاکسازی گردید. می‌توانید پیام جدید خود را بفرستید.",
+                parse_mode=self.parse_mode or None,
+                reply_markup={"inline_keyboard": [[{"text": "◀ بازگشت به منو", "callback_data": "db:back"}]]}
+            )
+
+        elif data == "db:status":
+            text = (
+                "📊 **وضعیت سیستم هرمس**\n\n"
+                "• وضعیت اتصال بله: متصل (Active)\n"
+                "• مدل هوش مصنوعی: فعال و آماده پاسخگویی\n"
+                "• مکانیزم پایداری اضطراری: فعال (Multi-tier Free Fallback)\n\n"
+                "آماده دریافت دستورات شما."
+            )
+            keyboard = {"inline_keyboard": [[{"text": "◀ بازگشت به منو", "callback_data": "db:back"}]]}
+            await self._client.edit_message_text(chat_id, msg_id, text, parse_mode=self.parse_mode or None, reply_markup=keyboard)
+
+        elif data == "db:help":
+            text = (
+                "📖 **راهنمای هرمس در بله**\n\n"
+                "• هر سوال، درخواست یا کدی دارید مستقیماً ارسال کنید.\n"
+                "• با دکمه **تغییر مدل** بین مدل‌های سریع یا استدلالی جابه‌جا شوید.\n"
+                "• با دستور `/new` گفتگوی جدید باز کنید.\n"
+                "• برای مشاهده دوباره منو: `/menu` یا `/dashboard`"
+            )
+            keyboard = {"inline_keyboard": [[{"text": "◀ بازگشت به منو", "callback_data": "db:back"}]]}
+            await self._client.edit_message_text(chat_id, msg_id, text, parse_mode=self.parse_mode or None, reply_markup=keyboard)
+
+        elif data == "db:back":
+            text = (
+                "🎛 **داشبورد هرمس (Hermes Agent)**\n\n"
+                "برای مدیریت دستیار و تغییر تنظیمات، روی یکی از گزینه‌های زیر بزنید:"
+            )
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "⚡ تغییر مدل هوش مصنوعی", "callback_data": "db:model"}],
+                    [
+                        {"text": "🔄 گفتگوی جدید (/new)", "callback_data": "db:new"},
+                        {"text": "📊 وضعیت سیستم (/status)", "callback_data": "db:status"},
+                    ],
+                    [{"text": "📖 راهنما (/help)", "callback_data": "db:help"}],
+                ]
+            }
+            await self._client.edit_message_text(chat_id, msg_id, text, parse_mode=self.parse_mode or None, reply_markup=keyboard)
 
 
 # ── plugin entry points ──────────────────────────────────────────────

@@ -480,4 +480,94 @@ def test_send_with_content_kwarg():
     assert call["json"]["text"] == "hello from content"
 
 
+def test_bale_send_dashboard():
+    adapter = make_adapter({"token": "t"})
+    adapter._client = make_client([
+        FakeResponse(200, {"ok": True, "result": {"message_id": 101}}),
+    ])
+    result = run(adapter.send_dashboard("100"))
+    assert result.success is True
+    assert result.message_id == "101"
+    call = adapter._client._client.calls[0]
+    assert "reply_markup" in call["json"]
+    assert "inline_keyboard" in call["json"]["reply_markup"]
+
+
+def test_bale_send_model_picker_and_callback():
+    adapter = make_adapter({"token": "t"})
+    adapter._client = make_client([
+        # 1. send_model_picker
+        FakeResponse(200, {"ok": True, "result": {"message_id": 202}}),
+        # 2. answerCallbackQuery
+        FakeResponse(200, {"ok": True, "result": True}),
+        # 3. editMessageText
+        FakeResponse(200, {"ok": True, "result": {"message_id": 202}}),
+    ])
+
+    switched = []
+    async def fake_on_model_selected(chat_id, model_id, provider_slug):
+        switched.append((chat_id, model_id, provider_slug))
+        return f"Switched to {model_id}"
+
+    providers = [{
+        "name": "Free AI",
+        "slug": "custom",
+        "models": ["openai-fast", "gpt-oss-20b"],
+        "is_current": True,
+    }]
+
+    result = run(adapter.send_model_picker(
+        "100", providers, "openai-fast", "custom", "test_key", fake_on_model_selected
+    ))
+    assert result.success is True
+
+    # Simulate callback query when user clicks the 2nd model (gpt-oss-20b -> mm:1)
+    cb_update = {
+        "update_id": 999,
+        "callback_query": {
+            "id": "query_123",
+            "from": {"id": 100},
+            "message": {
+                "message_id": 202,
+                "chat": {"id": 100},
+            },
+            "data": "mm:1",
+        }
+    }
+    run(adapter._handle_update(cb_update))
+    assert len(switched) == 1
+    assert switched[0] == ("100", "gpt-oss-20b", "custom")
+
+
+def test_bale_choice_picker():
+    adapter = make_adapter({"token": "t"})
+    adapter._client = make_client([
+        FakeResponse(200, {"ok": True, "result": {"message_id": 303}}),
+        FakeResponse(200, {"ok": True, "result": True}),
+        FakeResponse(200, {"ok": True, "result": {"message_id": 303}}),
+    ])
+
+    chosen = []
+    async def fake_on_choice(chat_id, val):
+        chosen.append((chat_id, val))
+        return f"Picked {val}"
+
+    choices = [{"label": "High", "value": "high"}, {"label": "Low", "value": "low"}]
+    res = run(adapter.send_choice_picker("100", "Pick level", choices, "sess", fake_on_choice))
+    assert res.success is True
+
+    # Callback
+    cb = {
+        "update_id": 1001,
+        "callback_query": {
+            "id": "q456",
+            "from": {"id": 100},
+            "message": {"message_id": 303, "chat": {"id": 100}},
+            "data": "cp:0",
+        }
+    }
+    run(adapter._handle_update(cb))
+    assert chosen == [("100", "high")]
+
+
 
