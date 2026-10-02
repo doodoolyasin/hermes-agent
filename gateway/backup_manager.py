@@ -106,26 +106,29 @@ class MigrationManager:
     def is_applied(self, migration_id: str) -> bool:
         if not self.db_path.exists():
             return False
-        conn = sqlite3.connect(str(self.db_path), timeout=5.0)
-        self._ensure_migrations_table(conn)
-        row = conn.execute(
-            "SELECT 1 FROM _applied_migrations WHERE migration_id = ?",
-            (migration_id,),
-        ).fetchone()
-        conn.close()
-        return bool(row)
+        try:
+            conn = sqlite3.connect(str(self.db_path), timeout=5.0)
+            self._ensure_migrations_table(conn)
+            row = conn.execute(
+                "SELECT 1 FROM _applied_migrations WHERE migration_id = ?",
+                (migration_id,),
+            ).fetchone()
+            conn.close()
+            return bool(row)
+        except Exception:
+            return False
 
     def apply_migration(self, migration_id: str, sql_commands: List[str]) -> bool:
         """Apply an idempotent migration with pre-check, auto-backup, and post-check."""
+        # 1. Pre-migration integrity check MUST run first!
+        if not BackupManager.verify_integrity(self.db_path):
+            raise RuntimeError(f"Pre-migration integrity check failed for {self.db_path}")
+
         if self.is_applied(migration_id):
             logger.debug("Migration %s already applied, skipping", migration_id)
             return True
 
         logger.info("Starting migration %s...", migration_id)
-
-        # 1. Pre-migration integrity check
-        if not BackupManager.verify_integrity(self.db_path):
-            raise RuntimeError(f"Pre-migration integrity check failed for {self.db_path}")
 
         # 2. Automatic backup
         snapshot = BackupManager.create_snapshot(self.db_path)

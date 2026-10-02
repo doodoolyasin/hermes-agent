@@ -556,7 +556,11 @@ class BaleAdapter(BasePlatformAdapter):
         limit = self.max_message_length
         if len(text) <= limit:
             return [text]
-        return [text[i:i + limit] for i in range(0, len(text), limit)]
+        try:
+            from gateway.platforms.helpers import _chunk_newline_preferred
+            return _chunk_newline_preferred(text, limit, len)
+        except Exception:
+            return [text[i:i + limit] for i in range(0, len(text), limit)]
 
     async def _exec_with_retry(self, coro_factory) -> SendResult:
         attempt = 0
