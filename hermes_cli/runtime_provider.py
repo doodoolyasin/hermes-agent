@@ -1136,4 +1136,16 @@ def resolve_runtime_with_fallback(config: Optional[Dict[str, Any]], *, requested
             logger.warning("Primary provider %s (%s). Falling back to %s/%s",
                            primary_failure_wording(primary_exc)[0], primary_exc, provider, model)
             return runtime, entry
+
+        # Auto-discover free provider if no configured provider/fallback is reachable
+        try:
+            from hermes_cli.free_provider_discovery import resolve_free_fallback_runtime
+            free_rt = resolve_free_fallback_runtime(config)
+            if free_rt is not None:
+                logger.info("Auto-discovered free AI provider: %s (model: %s)",
+                            free_rt.get("_free_provider_name"), free_rt.get("model"))
+                return free_rt, {"provider": free_rt.get("provider"), "model": free_rt.get("model")}
+        except Exception as exc:
+            logger.debug("free provider auto-discovery skipped: %s", exc)
+
         raise primary_exc

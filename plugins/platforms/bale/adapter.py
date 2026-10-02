@@ -168,6 +168,7 @@ class BaleClient:
 
     async def _request(self, method: str, payload: Optional[dict] = None,
                        *, files: Optional[dict] = None,
+                       as_form: bool = False,
                        timeout_s: Optional[float] = None) -> Any:
         """POST to ``<base>/<method>`` and return ``result`` or raise BaleAPIError."""
         client = self._ensure_client()
@@ -175,6 +176,9 @@ class BaleClient:
         try:
             if files:
                 resp = await client.post(url, data=payload or {}, files=files,
+                                         timeout=timeout_s or self.timeout_s)
+            elif as_form:
+                resp = await client.post(url, data=payload or {},
                                          timeout=timeout_s or self.timeout_s)
             else:
                 resp = await client.post(url, json=payload or {},
@@ -219,8 +223,23 @@ class BaleClient:
             payload["parse_mode"] = parse_mode
         return await self._request("sendMessage", payload)
 
+    async def edit_message_text(self, chat_id: Any, message_id: Any, text: str,
+                                parse_mode: Optional[str] = None) -> dict:
+        payload: dict = {"chat_id": chat_id, "message_id": message_id, "text": text}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        return await self._request("editMessageText", payload)
+
+    async def delete_message(self, chat_id: Any, message_id: Any) -> bool:
+        payload: dict = {"chat_id": chat_id, "message_id": message_id}
+        res = await self._request("deleteMessage", payload)
+        return bool(res)
+
+    async def get_file(self, file_id: str) -> dict:
+        return await self._request("getFile", {"file_id": file_id})
+
     async def send_chat_action(self, chat_id: Any, action: str = "typing") -> Any:
-        return await self._request("sendChatAction", {"chat_id": chat_id, "action": action})
+        return await self._request("sendChatAction", {"chat_id": str(chat_id), "action": action}, as_form=True)
 
     async def send_photo(self, chat_id: Any, photo: str, caption: Optional[str] = None,
                          reply_to_message_id: Optional[int] = None) -> dict:
@@ -317,6 +336,8 @@ class BaleAdapter(BasePlatformAdapter):
             self.markdown_enabled = bool(extra.get("markdown", False))
         else:
             self.markdown_enabled = str(markdown_env).strip().lower() not in _FALSEY
+        if self.markdown_enabled and not self.parse_mode:
+            self.parse_mode = "Markdown"
 
         self.max_message_length = MAX_MESSAGE_LENGTH
         self.bot_id: Optional[int] = None
@@ -506,12 +527,57 @@ class BaleAdapter(BasePlatformAdapter):
                 reply_id = None
         last: Optional[SendResult] = None
         for chunk in self._chunk(self.format_message(text)):
-            last = await self._send_with_retry(
-                lambda c=chunk: self._client.send_message(chat_id, c, reply_id,
-                                                          self.parse_mode or None))
+            async def _send_chunk(c=chunk):
+                try:
+                    return await self._client.send_message(chat_id, c, reply_id,
+                                                              self.parse_mode or None)
+                except BaleAPIError as exc:
+                    is_parse_error = (exc.status_code == 400 or exc.error_code == 400)
+                    if self.parse_mode and is_parse_error:
+                        logger.debug("Bale markdown send failed (%s); retrying plain text", exc.description)
+                        return await self._client.send_message(chat_id, _strip_markdown(c), reply_id, None)
+                    raise
+            last = await self._send_with_retry(_send_chunk)
             if not last.success:
                 return last
         return last or SendResult(success=True)
+
+    async def edit_message(self, chat_id: str, message_id: str, content: str,
+                           *, finalize: bool = False) -> SendResult:
+        """Edit an existing Bale message with Markdown support and plain-text fallback."""
+        if self._client is None:
+            return SendResult(success=False, error="not connected")
+        text = self.format_message(content)
+        try:
+            mid = int(message_id)
+        except (ValueError, TypeError):
+            return SendResult(success=False, error="invalid message_id")
+        try:
+            res = await self._client.edit_message_text(
+                chat_id, mid, text, parse_mode=self.parse_mode or None
+            )
+            return SendResult(success=True, message_id=str(mid))
+        except BaleAPIError as exc:
+            is_parse_error = (exc.status_code == 400 or exc.error_code == 400)
+            if self.parse_mode and is_parse_error:
+                try:
+                    res = await self._client.edit_message_text(
+                        chat_id, mid, _strip_markdown(text), parse_mode=None
+                    )
+                    return SendResult(success=True, message_id=str(mid))
+                except Exception:
+                    pass
+            return SendResult(success=False, error=exc.description)
+
+    async def delete_message(self, chat_id: str, message_id: str) -> bool:
+        """Delete a message from a Bale chat."""
+        if self._client is None:
+            return False
+        try:
+            mid = int(message_id)
+            return await self._client.delete_message(chat_id, mid)
+        except Exception:
+            return False
 
     async def send_typing(self, chat_id: str, metadata: Optional[dict] = None) -> None:
         if self._client is None:

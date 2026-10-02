@@ -908,8 +908,16 @@ class GatewayInboundMixin:
         )
 
     async def _hm_cmd_start(self, event, source, _quick_key):
-        logger.info("Ignoring /start platform ping for session %s", _quick_key)
-        return True, ""
+        logger.info("Handling /start platform ping for session %s", _quick_key)
+        welcome = (
+            "سلام! من هرمس (Hermes Agent) هستم، دستیار هوشمند شما 🤖\n\n"
+            "می‌توانید هر سوال، دستور یا کدی دارید بفرستید تا برایتان انجام دهم.\n\n"
+            "📌 دستورات مفید:\n"
+            "/help - مشاهده راهنما و دستورات\n"
+            "/new - شروع یک گفتگوی جدید\n"
+            "/status - مشاهده وضعیت سیستم"
+        )
+        return True, welcome
 
     async def _hm_cmd_egress(self, event, source, _quick_key):
         from hermes_cli.proxy_cli import format_status_text

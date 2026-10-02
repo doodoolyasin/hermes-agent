@@ -430,3 +430,41 @@ def test_standalone_send_with_pconfig(monkeypatch):
     assert res.get("ok") is True
     assert res.get("result", {}).get("message_id") == 999
 
+
+def test_edit_message():
+    adapter = make_adapter({"token": "t"})
+    adapter._client = make_client([
+        FakeResponse(200, {"ok": True, "result": {"message_id": 42}}),
+    ])
+    result = run(adapter.edit_message("100", "42", "updated content"))
+    assert result.success is True
+    assert result.message_id == "42"
+    call = adapter._client._client.calls[0]
+    assert call["url"].endswith("/editMessageText")
+    assert call["json"]["text"] == "updated content"
+
+
+def test_delete_message():
+    adapter = make_adapter({"token": "t"})
+    adapter._client = make_client([
+        FakeResponse(200, {"ok": True, "result": True}),
+    ])
+    success = run(adapter.delete_message("100", "42"))
+    assert success is True
+    call = adapter._client._client.calls[0]
+    assert call["url"].endswith("/deleteMessage")
+    assert call["json"]["message_id"] == 42
+
+
+def test_send_chat_action_as_form():
+    adapter = make_adapter({"token": "t"})
+    adapter._client = make_client([
+        FakeResponse(200, {"ok": True, "result": True}),
+    ])
+    run(adapter.send_typing("100"))
+    call = adapter._client._client.calls[0]
+    assert call["url"].endswith("/sendChatAction")
+    assert call["data"]["action"] == "typing"
+    assert call["data"]["chat_id"] == "100"
+
+
