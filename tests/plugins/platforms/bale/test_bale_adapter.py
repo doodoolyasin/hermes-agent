@@ -468,3 +468,16 @@ def test_send_chat_action_as_form():
     assert call["data"]["chat_id"] == "100"
 
 
+def test_send_with_content_kwarg():
+    adapter = make_adapter({"token": "t"})
+    adapter._client = make_client([
+        FakeResponse(200, {"ok": True, "result": {"message_id": 77}}),
+    ])
+    result = run(adapter.send(chat_id="100", content="hello from content"))
+    assert result.success is True
+    assert result.message_id == "77"
+    call = adapter._client._client.calls[0]
+    assert call["json"]["text"] == "hello from content"
+
+
+

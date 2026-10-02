@@ -500,7 +500,7 @@ class BaleAdapter(BasePlatformAdapter):
             return [text]
         return [text[i:i + limit] for i in range(0, len(text), limit)]
 
-    async def _send_with_retry(self, coro_factory) -> SendResult:
+    async def _exec_with_retry(self, coro_factory) -> SendResult:
         attempt = 0
         while True:
             try:
@@ -515,10 +515,17 @@ class BaleAdapter(BasePlatformAdapter):
                 attempt += 1
                 await asyncio.sleep(delay)
 
-    async def send(self, chat_id: str, text: str, reply_to: Optional[str] = None,
-                   metadata: Optional[dict] = None) -> SendResult:
+    async def _send_with_retry(self, *args: Any, **kwargs: Any) -> SendResult:
+        """Support both BasePlatformAdapter signature and internal callable signature."""
+        if args and callable(args[0]):
+            return await self._exec_with_retry(args[0])
+        return await super()._send_with_retry(*args, **kwargs)
+
+    async def send(self, chat_id: str, content: str = "", reply_to: Optional[str] = None,
+                   metadata: Optional[dict] = None, **kwargs) -> SendResult:
         if self._client is None:
             return SendResult(success=False, error="not connected")
+        text = content if content else (kwargs.get("text") or "")
         reply_id = None
         if reply_to:
             try:
@@ -537,7 +544,7 @@ class BaleAdapter(BasePlatformAdapter):
                         logger.debug("Bale markdown send failed (%s); retrying plain text", exc.description)
                         return await self._client.send_message(chat_id, _strip_markdown(c), reply_id, None)
                     raise
-            last = await self._send_with_retry(_send_chunk)
+            last = await self._exec_with_retry(_send_chunk)
             if not last.success:
                 return last
         return last or SendResult(success=True)
