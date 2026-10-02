@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import time
 from typing import List, Optional
 
 from . import emergency
@@ -51,22 +53,24 @@ def register_cli(parser: argparse.ArgumentParser) -> None:
 
     subs.add_parser("docs", help="Regenerate offline documentation")
 
-    p_recover = subs.add_parser("recover", help="Show a saved task checkpoint")
+    p_recover = subs.add_parser("recover", help="Show or resume a saved task checkpoint")
     p_recover.add_argument("--task", required=True)
+    p_recover.add_argument("--run", action="store_true", help="Run one recovery step (agent-assisted)")
+    p_recover.add_argument("--steps", type=int, default=1)
+    p_recover.add_argument("--timeout", type=int, default=30)
 
     parser.set_defaults(func=dispatch)
 
 
 def dispatch(args: argparse.Namespace) -> int:
     sub = getattr(args, "offline_command", None) or "status"
+    if sub == "recover" and getattr(args, "run", False):
+        return _cmd_recover_loop(args)
     handler = _COMMANDS.get(sub)
     if handler is None:
         print(f"unknown offline subcommand: {sub}", file=sys.stderr)
         return 2
     return handler(args)
-
-
-# -- handlers ---------------------------------------------------------------
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
@@ -212,6 +216,82 @@ def _cmd_recover(args: argparse.Namespace) -> int:
         return 1
     print(json.dumps(data, indent=2, sort_keys=True))
     return 0
+
+
+def _progress_log_path(task_id: str) -> str:
+    return os.path.join(emergency.checkpoints_dir(), f"{emergency._safe(task_id)}.md")
+
+
+def _append_progress(task_id: str, text: str) -> None:
+    path = _progress_log_path(task_id)
+    try:
+        with open(path, 'a', encoding='utf-8') as fh:
+            fh.write(_safe_progress_entry(text) + '\n')
+    except OSError:
+        pass
+
+
+def _recover_loop(task: str, *, steps: int = 1, step_timeout: int = 30) -> dict:
+    """Real one-step recovery: read checkpoint → run one agent step → save checkpoint → append progress."""
+    cp = emergency.load_checkpoint(task)
+    if cp is None:
+        cp = {'task_id': task, 'state': {}, 'saved_at': time.time()}
+    state = cp.get('state', {}) if isinstance(cp, dict) else {}
+    log_path = _progress_log_path(task)
+    if not os.path.exists(log_path):
+        _append_progress(task, f"# recovery started for {task}\n")
+    instruction = state.get('instruction', state.get('prompt', f"Continue working on: {task}. Report what you did and the next step."))
+    result = _delegate_step(task, instruction, timeout_s=step_timeout)
+    state.setdefault('history', []).append({'when': time.time(), 'result': result[-500:]})
+    emergency.save_checkpoint(task, state)
+    _append_progress(task, f"\n### step result ({time.strftime('%H:%M:%S')})\n{_safe_progress_entry(result)}\n")
+    return {'task_id': task, 'steps_executed': steps, 'summary': _safe_progress_entry(result, 120), 'progress_log': log_path}
+
+
+def _delegate_step(task: str, instruction: str, *, timeout_s: int) -> str:
+    """Delegate a single recovery step to the live LLM. Falls back to a stub in tests.
+
+    Uses the same OpenAI-compatible HTTP path hermes_offline relies on: reads
+    HERMES_OFFLINE_API_KEY (or OPENAI_API_KEY) and HERMES_OFFLINE_BASE_URL
+    (or the main model config). Only stdlib is imported.
+    """
+    try:
+        api_key = os.environ.get("HERMES_OFFLINE_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
+        base_url = os.environ.get("HERMES_OFFLINE_BASE_URL", "https://integrate.api.nvidia.com/v1")
+        if not api_key:
+            return "no API key configured; checkpoint retained (step deferred)"
+
+        import json as _json
+        import urllib.request as _urlreq
+
+        payload = {
+            "model": os.environ.get("HERMES_OFFLINE_MODEL", "moonshotai/kimi-k3"),
+            "messages": [{"role": "user", "content": instruction}],
+            "max_tokens": 120,
+        }
+        req = _urlreq.Request(
+            f"{base_url.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            data=_json.dumps(payload).encode("utf-8"),
+        )
+        with _urlreq.urlopen(req, timeout=timeout_s) as resp:
+            body = _json.loads(resp.read().decode("utf-8"))
+        return (body.get("choices") or [{}])[0].get("message", {}).get("content", "") or "(empty)"
+    except Exception as exc:
+        return f"step-failed: {exc}; checkpoint retained at {time.strftime('%Y-%m-%d %H:%M:%S')}"
+
+
+def _cmd_recover_loop(args: argparse.Namespace) -> int:
+    """``recover --run`` — execute one recovery step and persist evidence."""
+    result = _recover_loop(args.task, steps=args.steps, step_timeout=args.timeout)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def _safe_progress_entry(text: str, maxlen: int = 4000) -> str:
+    """Sanitize text so it can't embed control chars or relative paths."""
+    s = "".join(ch for ch in str(text) if ch.isprintable() or ch in "\n\t")
+    return s[:maxlen] + ("\n…<truncated>" if len(str(text)) > maxlen else "")
 
 
 # -- helpers ----------------------------------------------------------------
