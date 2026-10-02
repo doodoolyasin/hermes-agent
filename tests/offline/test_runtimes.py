@@ -10,12 +10,25 @@ def test_manager_exposes_both_adapters():
     m = runtimes.RuntimeManager.from_config({})
     assert m.get("ollama") is not None
     assert m.get("llama.cpp") is not None
+    assert m.get("lmstudio") is not None
+    assert m.get("vllm") is not None
 
 
 def test_openai_base_urls_are_openai_compatible():
     m = runtimes.RuntimeManager.from_config({})
     assert m.get("ollama").openai_base_url().endswith("/v1")
     assert m.get("llama.cpp").openai_base_url().endswith("/v1")
+    assert m.get("lmstudio").openai_base_url().endswith("/v1")
+    assert m.get("vllm").openai_base_url().endswith("/v1")
+
+
+def test_lmstudio_available_when_port_open(monkeypatch):
+    monkeypatch.setattr(runtimes, "_tcp_reachable", lambda *a, **k: True)
+    monkeypatch.setattr(runtimes, "_http_get_json", lambda *a, **k: {"data": [{"id": "local-model"}]})
+    rt = runtimes.LMStudioRuntime(host="127.0.0.1", port=1234)
+    assert rt.is_available() is True
+    assert rt.list_models() == ["local-model"]
+
 
 
 def test_runtime_for_prefers_declared_runtime():

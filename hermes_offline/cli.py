@@ -253,19 +253,51 @@ def _delegate_step(task: str, instruction: str, *, timeout_s: int) -> str:
 
     Uses the same OpenAI-compatible HTTP path hermes_offline relies on: reads
     HERMES_OFFLINE_API_KEY (or OPENAI_API_KEY) and HERMES_OFFLINE_BASE_URL
-    (or the main model config). Only stdlib is imported.
+    (or local fallback / main model config). Only stdlib is imported.
     """
     try:
+        base_url = os.environ.get("HERMES_OFFLINE_BASE_URL")
+        model = os.environ.get("HERMES_OFFLINE_MODEL")
         api_key = os.environ.get("HERMES_OFFLINE_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
-        base_url = os.environ.get("HERMES_OFFLINE_BASE_URL", "https://integrate.api.nvidia.com/v1")
+
+        # If no explicit base_url, try local fallback runtime first
+        if not base_url:
+            try:
+                from .fallback import local_fallback_entry
+
+                local = local_fallback_entry({"offline": {"auto_local_fallback": True}})
+                if local and local.get("base_url"):
+                    base_url = local["base_url"]
+                    model = model or local.get("model")
+                    api_key = api_key or "local-no-auth"
+            except Exception:
+                pass
+
+        # Fallback to NVIDIA NIM / cloud provider if still unconfigured
+        if not base_url:
+            base_url = "https://integrate.api.nvidia.com/v1"
+            if not api_key:
+                api_key = (
+                    os.environ.get("NVIDIA_API_KEY")
+                    or os.environ.get("HERMES_CUSTOM_INTEGRATE_API_NVIDIA_COM_API_KEY")
+                    or ""
+                )
+
+        if not model:
+            model = "moonshotai/kimi-k3"
+
+        is_local = "localhost" in base_url or "127.0.0.1" in base_url
         if not api_key:
-            return "no API key configured; checkpoint retained (step deferred)"
+            if is_local:
+                api_key = "local-no-auth"
+            else:
+                return "no API key configured; checkpoint retained (step deferred)"
 
         import json as _json
         import urllib.request as _urlreq
 
         payload = {
-            "model": os.environ.get("HERMES_OFFLINE_MODEL", "moonshotai/kimi-k3"),
+            "model": model,
             "messages": [{"role": "user", "content": instruction}],
             "max_tokens": 120,
         }

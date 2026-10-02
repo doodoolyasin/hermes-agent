@@ -620,17 +620,79 @@ def _env_enablement() -> Optional[dict]:
     return extra
 
 
-async def _standalone_send(chat_id: str, text: str, *, config: Any = None,
-                           metadata: Optional[dict] = None) -> dict:
-    """Out-of-process sender used by cron / send_message with no live gateway."""
-    token = os.environ.get("BALE_BOT_TOKEN")
+_YAML_BRIDGE = (
+    ("token", "BALE_BOT_TOKEN", "str"),
+    ("api_base", "BALE_API_BASE", "str"),
+    ("home_channel", "BALE_HOME_CHANNEL", "str"),
+    ("allowed_users", "BALE_ALLOWED_USERS", "csv"),
+    ("allow_from", "BALE_ALLOWED_USERS", "csv"),
+    ("allow_all", "BALE_ALLOW_ALL_USERS", "lower"),
+    ("markdown", "BALE_MARKDOWN", "lower"),
+)
+
+
+def _apply_yaml_config(yaml_cfg: dict, bale_cfg: dict) -> Optional[dict]:
+    """Translate config.yaml bale: keys into BALE_* env vars and PlatformConfig.extra."""
+    return _shared.apply_yaml_bridge(bale_cfg, _YAML_BRIDGE)
+
+
+async def _standalone_send(pconfig_or_chat_id: Any, chat_id_or_text: str,
+                           message: Optional[str] = None, *,
+                           thread_id: Optional[str] = None,
+                           media_files: Optional[list] = None,
+                           force_document: bool = False,
+                           config: Any = None,
+                           metadata: Optional[dict] = None,
+                           **kwargs: Any) -> dict:
+    """Out-of-process sender used by cron / send_message with no live gateway.
+
+    Supports both ``(pconfig, chat_id, message, ...)`` (the standard Hermes
+    standalone_sender_fn contract) and ``(chat_id, text)`` legacy calls.
+    """
+    if message is not None:
+        pconfig = pconfig_or_chat_id
+        chat_id = str(chat_id_or_text)
+        text = str(message)
+    else:
+        pconfig = config
+        chat_id = str(pconfig_or_chat_id)
+        text = str(chat_id_or_text)
+
+    token = None
+    if pconfig is not None:
+        token = getattr(pconfig, "token", None) or (getattr(pconfig, "extra", {}) or {}).get("token")
+    if not token:
+        token = os.environ.get("BALE_BOT_TOKEN")
     if not token:
         return _shared.send_error("BALE_BOT_TOKEN is not set")
-    api_base = os.environ.get("BALE_API_BASE") or DEFAULT_API_BASE
+
+    api_base = None
+    if pconfig is not None:
+        api_base = (getattr(pconfig, "extra", {}) or {}).get("api_base")
+    api_base = api_base or os.environ.get("BALE_API_BASE") or DEFAULT_API_BASE
+
     client = BaleClient(token, api_base=api_base)
     try:
-        result = await client.send_message(chat_id, _strip_markdown(text))
-        return {"ok": True, "result": result}
+        last_result = None
+        if text:
+            last_result = await client.send_message(chat_id, _strip_markdown(text))
+        if media_files:
+            for file_path in media_files:
+                if not file_path or not os.path.exists(file_path):
+                    continue
+                ext = os.path.splitext(file_path)[1].lower()
+                if force_document or ext not in (".png", ".jpg", ".jpeg", ".gif", ".webp",
+                                                 ".mp3", ".ogg", ".wav", ".mp4", ".mov"):
+                    last_result = await client.send_document(chat_id, file_path)
+                elif ext in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+                    last_result = await client.send_photo(chat_id, file_path)
+                elif ext in (".ogg", ".wav"):
+                    last_result = await client.send_voice(chat_id, file_path)
+                elif ext in (".mp3",):
+                    last_result = await client.send_audio(chat_id, file_path)
+                elif ext in (".mp4", ".mov"):
+                    last_result = await client.send_video(chat_id, file_path)
+        return {"ok": True, "result": last_result}
     except BaleAPIError as exc:
         return _shared.send_error(exc.description)
     finally:
@@ -645,6 +707,7 @@ def register(ctx) -> None:
         adapter_factory=lambda config: BaleAdapter(config),
         check_fn=check_requirements,
         validate_config=validate_config,
+        apply_yaml_config_fn=_apply_yaml_config,
         required_env=["BALE_BOT_TOKEN"],
         install_hint="pip install httpx",
         env_enablement_fn=_env_enablement,

@@ -33,6 +33,10 @@ OLLAMA_DEFAULT_HOST = "127.0.0.1"
 OLLAMA_DEFAULT_PORT = 11434
 LLAMA_CPP_DEFAULT_HOST = "127.0.0.1"
 LLAMA_CPP_DEFAULT_PORT = 8080
+LMSTUDIO_DEFAULT_HOST = "127.0.0.1"
+LMSTUDIO_DEFAULT_PORT = 1234
+VLLM_DEFAULT_HOST = "127.0.0.1"
+VLLM_DEFAULT_PORT = 8000
 
 
 def _tcp_reachable(host: str, port: int, timeout_s: float = 0.75) -> bool:
@@ -209,12 +213,55 @@ class LlamaCppRuntime(RuntimeAdapter):
             return False
 
 
+class LMStudioRuntime(RuntimeAdapter):
+    name = "lmstudio"
+    label = "LM Studio"
+
+    def is_available(self) -> bool:
+        if not _tcp_reachable(self.host, self.port):
+            return False
+        return _http_get_json(f"http://{self.host}:{self.port}/v1/models", self.timeout_s) is not None
+
+    def list_models(self) -> List[str]:
+        data = _http_get_json(f"http://{self.host}:{self.port}/v1/models", self.timeout_s)
+        if isinstance(data, dict) and isinstance(data.get("data"), list):
+            return [str(m.get("id")) for m in data["data"] if isinstance(m, dict) and m.get("id")]
+        return []
+
+    def detail(self) -> str:
+        return f"server=http://{self.host}:{self.port}/v1"
+
+
+class VLLMRuntime(RuntimeAdapter):
+    name = "vllm"
+    label = "vLLM"
+
+    def is_available(self) -> bool:
+        if not _tcp_reachable(self.host, self.port):
+            return False
+        return _http_get_json(f"http://{self.host}:{self.port}/v1/models", self.timeout_s) is not None
+
+    def list_models(self) -> List[str]:
+        data = _http_get_json(f"http://{self.host}:{self.port}/v1/models", self.timeout_s)
+        if isinstance(data, dict) and isinstance(data.get("data"), list):
+            return [str(m.get("id")) for m in data["data"] if isinstance(m, dict) and m.get("id")]
+        return []
+
+    def detail(self) -> str:
+        return f"server=http://{self.host}:{self.port}/v1"
+
+
 _RUNTIME_NAMES = {
     "ollama": OllamaRuntime,
     "llama.cpp": LlamaCppRuntime,
     "llamacpp": LlamaCppRuntime,
     "llama_server": LlamaCppRuntime,
     "gguf": LlamaCppRuntime,
+    "lmstudio": LMStudioRuntime,
+    "lm_studio": LMStudioRuntime,
+    "lm-studio": LMStudioRuntime,
+    "vllm": VLLMRuntime,
+    "v_llm": VLLMRuntime,
 }
 
 
@@ -228,11 +275,17 @@ class RuntimeManager:
         ollama_port: int = OLLAMA_DEFAULT_PORT,
         llama_cpp_host: str = LLAMA_CPP_DEFAULT_HOST,
         llama_cpp_port: int = LLAMA_CPP_DEFAULT_PORT,
+        lmstudio_host: str = LMSTUDIO_DEFAULT_HOST,
+        lmstudio_port: int = LMSTUDIO_DEFAULT_PORT,
+        vllm_host: str = VLLM_DEFAULT_HOST,
+        vllm_port: int = VLLM_DEFAULT_PORT,
         timeout_s: float = 2.5,
     ) -> None:
         self.adapters: Dict[str, RuntimeAdapter] = {
             "ollama": OllamaRuntime(host=ollama_host, port=ollama_port, timeout_s=timeout_s),
             "llama.cpp": LlamaCppRuntime(host=llama_cpp_host, port=llama_cpp_port, timeout_s=timeout_s),
+            "lmstudio": LMStudioRuntime(host=lmstudio_host, port=lmstudio_port, timeout_s=timeout_s),
+            "vllm": VLLMRuntime(host=vllm_host, port=vllm_port, timeout_s=timeout_s),
         }
 
     @classmethod
@@ -243,6 +296,10 @@ class RuntimeManager:
             ollama_port=int(cfg.get("ollama_port", OLLAMA_DEFAULT_PORT)),
             llama_cpp_host=cfg.get("llama_cpp_host", LLAMA_CPP_DEFAULT_HOST),
             llama_cpp_port=int(cfg.get("llama_cpp_port", LLAMA_CPP_DEFAULT_PORT)),
+            lmstudio_host=cfg.get("lmstudio_host", LMSTUDIO_DEFAULT_HOST),
+            lmstudio_port=int(cfg.get("lmstudio_port", LMSTUDIO_DEFAULT_PORT)),
+            vllm_host=cfg.get("vllm_host", VLLM_DEFAULT_HOST),
+            vllm_port=int(cfg.get("vllm_port", VLLM_DEFAULT_PORT)),
             timeout_s=float(cfg.get("timeout_s", 2.5)),
         )
 
@@ -251,7 +308,10 @@ class RuntimeManager:
         cls = _RUNTIME_NAMES.get(key)
         if cls is None:
             return None
-        return self.adapters.get("ollama" if cls is OllamaRuntime else "llama.cpp")
+        for adapter in self.adapters.values():
+            if isinstance(adapter, cls):
+                return adapter
+        return None
 
     def runtime_for(self, record: ModelRecord) -> Optional[RuntimeAdapter]:
         """Pick the adapter a record declares (``record.runtime`` /

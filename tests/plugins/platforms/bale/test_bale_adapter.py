@@ -394,3 +394,39 @@ def test_env_enablement_with_token(monkeypatch):
     monkeypatch.setenv("BALE_BOT_TOKEN", "from-env")
     extra = bale._env_enablement()
     assert extra and extra["token"] == "from-env"
+
+
+def test_apply_yaml_config_bridges_keys(monkeypatch):
+    cfg = {
+        "token": "tok123",
+        "home_channel": "12345",
+        "allowed_users": ["111", "222"],
+        "markdown": True,
+    }
+    extra = bale._apply_yaml_config({}, cfg)
+    assert extra["token"] == "tok123"
+    assert extra["home_channel"] == "12345"
+    assert extra["markdown"] is True
+
+
+def test_standalone_send_with_pconfig(monkeypatch):
+    class FakeConfig:
+        token = "test-token"
+        extra = {"api_base": "https://fake.bale.ai"}
+
+    class FakeClient:
+        def __init__(self, token, api_base=None):
+            self.token = token
+            self.api_base = api_base
+
+        async def send_message(self, chat_id, text):
+            return {"message_id": 999, "chat_id": chat_id, "text": text}
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(bale, "BaleClient", FakeClient)
+    res = run(bale._standalone_send(FakeConfig(), "777", "hello bale", thread_id="10"))
+    assert res.get("ok") is True
+    assert res.get("result", {}).get("message_id") == 999
+

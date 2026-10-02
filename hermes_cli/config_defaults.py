@@ -1625,6 +1625,15 @@ DEFAULT_CONFIG = {
         # reply_prefix: None = built-in "☤ *Hermes Agent*" header; "" disables; \n allowed.
     },
 
+    "bale": {
+        # Bale messenger bot (token, allowed_users, markdown toggle)
+    },
+
+    "offline": {
+        # Automatic local fallback when remote providers fail
+        "auto_local_fallback": False,
+    },
+
     "telegram": {
         "reactions": False,  # add 👀/✅/❌ reactions to messages during processing
         # per-chat/topic ephemeral system prompts (topics inherit from parent group)
@@ -3025,6 +3034,15 @@ OPTIONAL_ENV_VARS = {
         "Langfuse server URL (leave empty for cloud.langfuse.com)", None, password=False,
         advanced=True),
     # ── Messaging platforms ──
+    "BALE_BOT_TOKEN": _msg(
+        "Bale bot token created via @BotFather on Bale", "Bale bot token",
+        "https://bale.ai", password=True),
+    "BALE_ALLOWED_USERS": _msg(
+        "Optional comma-separated Bale user IDs allowed to use the bot",
+        "Allowed Bale user IDs (comma-separated)", None),
+    "BALE_HOME_CHANNEL": _msg(
+        "Default Bale channel or chat ID for Hermes notifications/cron",
+        "Bale home channel ID", None),
     "TELEGRAM_BOT_TOKEN": _msg(
         "Complete Telegram bot token created by @BotFather (numeric bot ID followed by a colon "
         "and secret)", "Telegram bot token", "https://t.me/BotFather", password=True),
