@@ -117,6 +117,20 @@ def get_fallback_chain(config: dict[str, Any] | None) -> list[dict[str, Any]]:
             if identity not in seen:
                 seen.add(identity)
                 chain.append(entry)
+    # Offline survival path: append a local-runtime entry LAST when the operator
+    # opted in and a verified local model + available runtime exist. Guarded so
+    # offline support can never break fallback-chain resolution.
+    try:
+        from hermes_offline.fallback import local_fallback_entry
+
+        local = local_fallback_entry(config)
+        if local:
+            identity = _entry_identity(local)
+            if identity not in seen:
+                seen.add(identity)
+                chain.append(local)
+    except Exception:  # noqa: BLE001 - never fatal
+        logger.debug("offline local fallback unavailable", exc_info=True)
     return chain
 
 

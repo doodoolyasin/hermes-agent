@@ -1,0 +1,40 @@
+name: bale-platform
+label: Bale
+kind: platform
+version: 1.0.0
+description: >-
+  First-class Bale messenger gateway. Long-polls the Bale Bot API
+  (https://tapi.bale.ai/bot<TOKEN>/<method>) for inbound updates and delivers
+  text, images, documents, voice and video, with retry/backoff, token
+  redaction and per-message dedup.
+author: Hermes Agent contributors
+requires_env:
+  BALE_BOT_TOKEN:
+    description: Bot token from BotFather in the Bale app (tapi.bale.ai).
+    password: true
+optional_env:
+  BALE_API_BASE:
+    description: Bale Bot API base URL (default https://tapi.bale.ai).
+  BALE_ALLOWED_USERS:
+    description: Comma-separated allowlist of Bale user ids permitted to talk to the bot.
+  BALE_ALLOW_ALL_USERS:
+    description: Set to 1/true to allow every Bale user (overrides BALE_ALLOWED_USERS).
+  BALE_HOME_CHANNEL:
+    description: Default chat id for cron / out-of-process send_message delivery.
+  BALE_HOME_CHANNEL_NAME:
+    description: Friendly name for BALE_HOME_CHANNEL shown by `gateway status`.
+  BALE_POLL_TIMEOUT:
+    description: getUpdates long-poll timeout in seconds (default 30).
+  BALE_MAX_FAILURES:
+    description: Hard cap on consecutive poll failures before the poll loop gives up (default 8).
+  BALE_BACKOFF_BASE:
+    description: First retry backoff in seconds (default 1.0, exponential thereafter).
+  BALE_BACKOFF_MAX:
+    description: Maximum retry backoff in seconds (default 60.0).
+  BALE_PARSE_MODE:
+    description: >-
+      Optional parse_mode name sent with messages. Bale renders its documented
+      Markdown automatically; leave unset unless your deployment requires an
+      explicit parse_mode.
+  BALE_MARKDOWN:
+    description: Set to 0/false to strip Markdown and send plain text instead.

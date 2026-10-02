@@ -2891,6 +2891,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "computer-use",
         "config", "console", "cron", "curator", "dashboard", "serve", "debug", "doctor",
         "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
+        "offline",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
         "journey", "memory-graph", "learning",
         "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "portal", "profile",
@@ -3503,6 +3504,14 @@ def _build_cli_parser():
 
     build_hooks_parser(subparsers, cmd_hooks=cmd_hooks)
     build_doctor_parser(subparsers, cmd_doctor=cmd_doctor)
+    # Offline / emergency mode. Optional: a registration failure (e.g. the
+    # hermes_offline package pruned from a lean install) must never break the
+    # whole CLI, mirroring the LSP registration above.
+    try:
+        from hermes_cli.subcommands.offline import build_offline_parser as _offline_register
+        _offline_register(subparsers)
+    except Exception as _offline_err:  # noqa: BLE001
+        logger.debug("offline CLI registration failed: %s", _offline_err)
     build_verify_parser(subparsers, cmd_verify=cmd_verify)
     build_security_parser(subparsers, cmd_security=cmd_security)
     build_approvals_parser(subparsers, cmd_approvals=cmd_approvals)
