@@ -42,6 +42,9 @@ class ProcessingOutcome(Enum):
     CANCELLED = "cancelled"
 
 
+_BIDI_AND_CONTROL_CHARS = " \t\r\n\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u200b\ufeff"
+
+
 @dataclass
 class MessageEvent:
     """Incoming message from a platform — the normalized shape all adapters produce."""
@@ -147,7 +150,8 @@ class MessageEvent:
         lets is_command / get_command / get_command_args work correctly even
         when the payload is prefixed with one or more media refs.
         """
-        return _ATTACHMENT_REF_RE.sub("", (self.text or "").lstrip()).lstrip()
+        raw = (self.text or "").strip(_BIDI_AND_CONTROL_CHARS)
+        return _ATTACHMENT_REF_RE.sub("", raw).strip(_BIDI_AND_CONTROL_CHARS)
 
     def is_command(self) -> bool:
         """Check if this is a command message (e.g., /new, /reset)."""
@@ -158,8 +162,8 @@ class MessageEvent:
         if not self.is_command():
             return None
         raw = self._command_text().split(maxsplit=1)[0][1:].lower().split("@", 1)[0]
-        # Reject file paths: valid command names never contain /
-        return None if "/" in raw else raw
+        # Reject empty command or file paths: valid command names never contain /
+        return None if (not raw or "/" in raw) else raw
 
     def get_command_args(self) -> str:
         """Get the arguments after a command."""

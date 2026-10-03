@@ -157,26 +157,41 @@ class PersistentTaskQueue:
             if existing:
                 return self._row_to_task(existing)
 
-            conn.execute(
-                """INSERT INTO task_queue (
-                    task_id, idempotency_key, session_key, task_type, payload,
-                    state, priority, attempts, max_attempts, timeout_seconds,
-                    checkpoint, created_at, updated_at, owner_pid
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, ?, ?, NULL)""",
-                (
-                    task_id,
-                    idem_key,
-                    session_key,
-                    task_type,
-                    payload_json,
-                    TaskState.QUEUED.value,
-                    priority,
-                    max_attempts,
-                    timeout_seconds,
-                    now,
-                    now,
-                ),
-            )
+            try:
+                conn.execute(
+                    """INSERT INTO task_queue (
+                        task_id, idempotency_key, session_key, task_type, payload,
+                        state, priority, attempts, max_attempts, timeout_seconds,
+                        checkpoint, created_at, updated_at, owner_pid
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, ?, ?, NULL)""",
+                    (
+                        task_id,
+                        idem_key,
+                        session_key,
+                        task_type,
+                        payload_json,
+                        TaskState.QUEUED.value,
+                        priority,
+                        max_attempts,
+                        timeout_seconds,
+                        now,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                # Concurrent insert beat us to it with the same idempotency key
+                cursor = conn.execute(
+                    """SELECT task_id, idempotency_key, session_key, task_type, payload,
+                              state, priority, attempts, max_attempts, timeout_seconds,
+                              checkpoint, created_at, updated_at, started_at, completed_at,
+                              last_error, owner_pid
+                       FROM task_queue WHERE idempotency_key = ?""",
+                    (idem_key,),
+                )
+                existing = cursor.fetchone()
+                if existing:
+                    return self._row_to_task(existing)
+                raise
 
         return QueuedTask(
             task_id=task_id,
@@ -192,10 +207,24 @@ class PersistentTaskQueue:
             updated_at=now,
         )
 
-    def claim_next(self) -> Optional[QueuedTask]:
+    def get_task(self, task_id: str) -> Optional[QueuedTask]:
+        """Fetch a task by ID."""
+        with _DB_LOCK, _transaction() as conn:
+            cursor = conn.execute(
+                """SELECT task_id, idempotency_key, session_key, task_type, payload,
+                          state, priority, attempts, max_attempts, timeout_seconds,
+                          checkpoint, created_at, updated_at, started_at, completed_at,
+                          last_error, owner_pid
+                   FROM task_queue WHERE task_id = ?""",
+                (task_id,),
+            )
+            row = cursor.fetchone()
+            return self._row_to_task(row) if row else None
+
+    def claim_next(self, worker_pid: Optional[int] = None) -> Optional[QueuedTask]:
         """Atomically claim the highest-priority queued or retrying task."""
         now = time.time()
-        my_pid = os.getpid()
+        my_pid = worker_pid or os.getpid()
 
         with _DB_LOCK, _transaction() as conn:
             cursor = conn.execute(
@@ -426,6 +455,9 @@ class PersistentTaskQueue:
             last_error=err,
             owner_pid=owner_pid,
         )
+
+    claim_next_task = claim_next
+    complete_task = complete
 
 
 global_task_queue = PersistentTaskQueue()
