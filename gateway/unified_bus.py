@@ -135,9 +135,23 @@ class UnifiedMessageBus:
         """
         self._subscribers.append((platform.lower() if platform else None, handler))
 
-    def unsubscribe(self, handler: MessageHandler) -> None:
-        """Remove a subscriber handler."""
-        self._subscribers = [sub for sub in self._subscribers if sub[1] != handler]
+    def unsubscribe(self, handler: MessageHandler, platform: Optional[str] = None) -> int:
+        """Remove a subscriber handler.
+
+        If platform is provided, removes only subscriptions for that specific platform.
+        If platform is None, removes all subscriptions for this handler.
+        Returns the number of removed subscriptions.
+        """
+        target_p = platform.lower() if platform else None
+        prev_count = len(self._subscribers)
+        if target_p is not None:
+            self._subscribers = [
+                sub for sub in self._subscribers
+                if not (sub[1] == handler and sub[0] == target_p)
+            ]
+        else:
+            self._subscribers = [sub for sub in self._subscribers if sub[1] != handler]
+        return prev_count - len(self._subscribers)
 
     async def publish(self, message: UnifiedMessage) -> None:
         """Publish an incoming unified message through the bus to matching subscribers."""

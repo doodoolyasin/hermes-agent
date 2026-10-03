@@ -108,6 +108,7 @@ class ConnectivityMatrix:
 
     def probe_https(self, host: str = "1.1.1.1", port: int = 443) -> LayerProbeResult:
         start = time.perf_counter()
+        s = None
         try:
             ctx = ssl.create_default_context()
             s = socket.create_connection((host, port), timeout=self.probe_timeout)
@@ -117,6 +118,12 @@ class ConnectivityMatrix:
         except Exception as exc:
             ms = (time.perf_counter() - start) * 1000.0
             return LayerProbeResult("HTTPS", ConnectivityStatus.OFFLINE, round(ms, 1), error=str(exc))
+        finally:
+            if s:
+                try:
+                    s.close()
+                except Exception:
+                    pass
 
     def probe_endpoint(self, name: str, url: str) -> LayerProbeResult:
         start = time.perf_counter()

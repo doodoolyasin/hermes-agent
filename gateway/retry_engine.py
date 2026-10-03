@@ -48,7 +48,13 @@ class RetryPolicy:
 
     def compute_delay(self, attempt: int) -> float:
         """Compute exponential backoff delay with selected jitter strategy."""
-        raw_delay = min(self.max_delay, self.base_delay * (self.factor ** (attempt - 1)))
+        exp = min(60, max(0, attempt - 1))
+        try:
+            factor_val = self.factor ** exp
+            raw_delay = min(self.max_delay, self.base_delay * factor_val)
+        except OverflowError:
+            raw_delay = self.max_delay
+
         if self.jitter == "full":
             return random.uniform(0.0, raw_delay)
         elif self.jitter == "equal":
