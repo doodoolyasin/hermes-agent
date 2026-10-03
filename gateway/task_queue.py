@@ -432,8 +432,16 @@ class PersistentTaskQueue:
             owner_pid,
         ) = row
 
-        payload = json.loads(payload_str) if payload_str else {}
-        checkpoint = json.loads(cp_str) if cp_str else None
+        try:
+            payload = json.loads(payload_str) if payload_str else {}
+        except Exception:
+            payload = {"_corrupted_raw_payload": payload_str}
+
+        try:
+            checkpoint = json.loads(cp_str) if cp_str else None
+        except Exception:
+            checkpoint = {"_corrupted_raw_checkpoint": cp_str}
+
         state = TaskState(st_str) if st_str in TaskState._value2member_map_ else TaskState.QUEUED
 
         return QueuedTask(

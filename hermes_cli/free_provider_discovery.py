@@ -153,7 +153,13 @@ def discover_free_provider(config: Optional[Dict[str, Any]] = None) -> Optional[
     all_candidates = custom_candidates + FREE_CANDIDATES
 
     for candidate in all_candidates:
-        probe_url = candidate.get("probe_url") or f"{candidate.get('base_url')}/models"
+        base_url = candidate.get("base_url")
+        probe_url = candidate.get("probe_url")
+        if not probe_url:
+            if not base_url:
+                continue
+            probe_url = f"{base_url.rstrip('/')}/models"
+
         data = probe_endpoint(probe_url)
         if data is not None:
             model = candidate.get("default_model", "openai-fast")

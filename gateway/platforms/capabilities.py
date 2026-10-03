@@ -33,6 +33,26 @@ class PlatformCapabilities:
         """Check if a named feature is supported by this platform."""
         return bool(getattr(self, feature, False))
 
+    def list_supported(self) -> list[str]:
+        """Return list of supported feature names."""
+        return [k for k, v in self.to_dict().items() if v is True]
+
+    def list_unsupported(self) -> list[str]:
+        """Return list of unsupported feature names."""
+        return [k for k, v in self.to_dict().items() if v is False]
+
+    def get_fallback_strategy(self, feature: str) -> str:
+        """Return recommended fallback strategy when a feature is unsupported."""
+        if self.supports(feature):
+            return "native"
+        if feature in ("inline_keyboard", "callbacks"):
+            return "numbered_text_menu" if self.buttons_text_fallback else "omit"
+        if feature == "markdown":
+            return "plain_text_strip"
+        if feature in ("voice", "video"):
+            return "text_transcription_or_link"
+        return "unsupported"
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert capability set to a clean dictionary."""
         return asdict(self)
