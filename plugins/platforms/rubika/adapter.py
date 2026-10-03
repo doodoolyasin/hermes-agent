@@ -213,6 +213,12 @@ class RubikaAdapter(BasePlatformAdapter):
         self._poll_task: Optional[asyncio.Task] = None
         self._dedup = MessageDeduplicator(max_size=2048, ttl_seconds=3600.0)
 
+    @staticmethod
+    def normalize_digits(text: str) -> str:
+        """Convert Persian (۰-۹) and Arabic (٠-٩) numerals to standard ASCII (0-9)."""
+        persian_map = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+        return text.translate(persian_map)
+
     def render_fallback_menu(self, title: str, options: List[str]) -> str:
         """Render a clean numbered Persian text menu when inline buttons are unsupported."""
         lines = [f"📌 **{title}**\n"]
@@ -220,6 +226,29 @@ class RubikaAdapter(BasePlatformAdapter):
             lines.append(f"{idx}️⃣ {opt}")
         lines.append("\n💡 برای انتخاب، عدد یا عنوان گزینه را ارسال کنید.")
         return "\n".join(lines)
+
+    def parse_menu_choice(self, user_input: str, options: List[str]) -> Optional[int]:
+        """Parse user response to a numbered fallback menu.
+
+        Returns 0-based index if valid (from number or exact/case-insensitive match),
+        or None if input is invalid or out of range.
+        """
+        if not user_input or not options:
+            return None
+        cleaned = self.normalize_digits(user_input.strip())
+        # Try numeric index (1-based from menu display)
+        if cleaned.isdigit():
+            idx = int(cleaned) - 1
+            if 0 <= idx < len(options):
+                return idx
+            return None
+
+        # Try match against option label
+        lowered = user_input.strip().lower()
+        for idx, opt in enumerate(options):
+            if lowered == opt.strip().lower():
+                return idx
+        return None
 
     async def connect(self, *, is_reconnect: bool = False, **kwargs: Any) -> bool:
         if not self.token:

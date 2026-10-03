@@ -88,6 +88,37 @@ class BackupManager:
             logger.error("Failed to restore snapshot: %s", exc)
             return False
 
+    @staticmethod
+    def list_snapshots(db_path: Path | str) -> List[Path]:
+        """List all snapshots for a given database file sorted by modification time (newest first)."""
+        path = Path(db_path)
+        parent = path.parent
+        prefix = f"{path.name}.bak_"
+        if not parent.exists():
+            return []
+        snapshots = [
+            f for f in parent.iterdir()
+            if f.is_file() and f.name.startswith(prefix)
+        ]
+        return sorted(snapshots, key=lambda f: f.stat().st_mtime, reverse=True)
+
+    @staticmethod
+    def prune_snapshots(db_path: Path | str, keep_count: int = 5) -> int:
+        """Prune older snapshots, keeping only the most recent keep_count."""
+        snapshots = BackupManager.list_snapshots(db_path)
+        if len(snapshots) <= keep_count:
+            return 0
+
+        to_prune = snapshots[keep_count:]
+        pruned = 0
+        for snap in to_prune:
+            try:
+                snap.unlink()
+                pruned += 1
+            except Exception as exc:
+                logger.warning("Failed to prune snapshot %s: %s", snap, exc)
+        return pruned
+
 
 class MigrationManager:
     """Applies idempotent migrations under the automated backup policy."""
