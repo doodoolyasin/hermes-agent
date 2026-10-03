@@ -393,6 +393,13 @@ def release_runtime_claim(obligation_id: str, error: str = "") -> bool:
     pid, started = _owner_stamp()
     if started is None:
         return False
+    safe_error = error[:500] if error else None
+    if safe_error:
+        try:
+            from agent.redact import redact_sensitive_text
+            safe_error = redact_sensitive_text(safe_error, force=True)
+        except Exception:
+            pass
     with _DB_LOCK, _transaction() as conn:
         cursor = conn.execute(
             """UPDATE delivery_obligations
@@ -401,17 +408,24 @@ def release_runtime_claim(obligation_id: str, error: str = "") -> bool:
                    updated_at=?, last_error=?
                WHERE obligation_id=? AND state='attempting'
                  AND owner_pid IS ? AND owner_started_at IS ?""",
-            (time.time(), error[:500] if error else None, obligation_id, pid, started))
+            (time.time(), safe_error, obligation_id, pid, started))
     return bool(cursor.rowcount)
 
 
 def _update_state(obligation_id: str, state: str, error: str = "") -> None:
+    safe_error = error[:500] if error else None
+    if safe_error:
+        try:
+            from agent.redact import redact_sensitive_text
+            safe_error = redact_sensitive_text(safe_error, force=True)
+        except Exception:
+            pass
     with _DB_LOCK, _transaction() as conn:
         conn.execute(
             """UPDATE delivery_obligations
                SET state=?, updated_at=?, last_error=?
                WHERE obligation_id=?""",
-            (state, time.time(), error[:500] if error else None, obligation_id))
+            (state, time.time(), safe_error, obligation_id))
 
 
 def _claimed_row(oid, session_key, platform, chat_id, thread_id, content, attempts, profile, *,

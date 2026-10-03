@@ -183,7 +183,10 @@ class ModelRegistry:
         model.last_checked_at = now
 
         if res.available:
-            model.health = ModelHealthStatus.HEALTHY
+            if res.latency_ms is not None and res.latency_ms > 4000.0:
+                model.health = ModelHealthStatus.DEGRADED
+            else:
+                model.health = ModelHealthStatus.HEALTHY
             model.latency_ms = res.latency_ms
             model.last_error = None
         else:

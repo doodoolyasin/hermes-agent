@@ -103,6 +103,8 @@ class AuditLogger:
         *,
         event_type: Optional[str] = None,
         severity: Optional[str] = None,
+        actor: Optional[str] = None,
+        platform: Optional[str] = None,
         since: Optional[float] = None,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
@@ -116,6 +118,12 @@ class AuditLogger:
         if severity:
             query_sql += " AND severity = ?"
             params.append(severity.upper())
+        if actor:
+            query_sql += " AND actor = ?"
+            params.append(actor)
+        if platform:
+            query_sql += " AND platform = ?"
+            params.append(platform)
         if since is not None:
             query_sql += " AND timestamp >= ?"
             params.append(float(since))
@@ -151,6 +159,8 @@ class AuditLogger:
         with _DB_LOCK, _transaction() as conn:
             cur = conn.execute("DELETE FROM audit_log WHERE timestamp < ?", (cutoff,))
             return cur.rowcount
+
+    record = log
 
 
 global_audit_logger = AuditLogger()
