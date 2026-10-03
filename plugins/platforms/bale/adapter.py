@@ -18,6 +18,7 @@ stores or echoes the bot token.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import logging
 import os
@@ -393,6 +394,10 @@ class BaleAdapter(BasePlatformAdapter):
         self._dedup = MessageDeduplicator(max_size=2048, ttl_seconds=3600.0)
         self._model_picker_state: Dict[str, dict] = {}
         self._choice_picker_state: Dict[str, dict] = {}
+        self._slash_confirm_state: Dict[str, str] = {}
+        self._clarify_state: Dict[str, str] = {}
+        self._approval_state: Dict[str, str] = {}
+        self._approval_counter = itertools.count(1)
 
     # -- lifecycle ---------------------------------------------------
     async def connect(self, *, is_reconnect: bool = False, **kwargs: Any) -> bool:
@@ -715,13 +720,17 @@ class BaleAdapter(BasePlatformAdapter):
     # -- interactive inline keyboard & dashboard ---------------------
     def _build_provider_keyboard(self, providers: list, page: int = 0) -> tuple[dict, str]:
         buttons = []
+        buttons.append({"text": "🚨 هوش مصنوعی اضطراری (بدون API Key)", "callback_data": "mp:emergency_free"})
         for i, p in enumerate(providers):
+            slug = p.get("slug", i)
+            if slug in ("emergency_free", "free_fallback"):
+                continue
             name = p.get("name", p.get("slug", f"Provider {i}"))
             count = p.get("total_models", len(p.get("models", [])))
             label = f"{name} ({count})"
             if p.get("is_current"):
                 label = f"✓ {label}"
-            buttons.append({"text": label, "callback_data": f"mp:{p.get('slug', i)}"})
+            buttons.append({"text": label, "callback_data": f"mp:{slug}"})
         rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
         rows.append([{"text": "❌ انصراف", "callback_data": "mx"}])
         return {"inline_keyboard": rows}, ""
@@ -858,6 +867,119 @@ class BaleAdapter(BasePlatformAdapter):
         except Exception as exc:
             return SendResult(success=False, error=str(exc))
 
+    async def send_slash_confirm(
+        self, chat_id: str, title: str, message: str, session_key: str, confirm_id: str,
+        metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+        """Render a three-button slash-command confirmation prompt with inline buttons like Telegram."""
+        if self._client is None:
+            return SendResult(success=False, error="not connected")
+
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ تایید یکباره (Approve Once)", "callback_data": f"sc:once:{confirm_id}"},
+                    {"text": "🔒 تایید همیشگی (Always)", "callback_data": f"sc:always:{confirm_id}"},
+                ],
+                [
+                    {"text": "❌ انصراف (Cancel)", "callback_data": f"sc:cancel:{confirm_id}"}
+                ]
+            ]
+        }
+        self._slash_confirm_state[confirm_id] = session_key
+
+        try:
+            res = await self._client.send_message(
+                chat_id, message, parse_mode=self.parse_mode or None, reply_markup=keyboard
+            )
+            msg_id = (res or {}).get("message_id")
+            return SendResult(success=True, message_id=str(msg_id) if msg_id else None)
+        except Exception:
+            try:
+                plain = self._strip_markdown(message)
+                res = await self._client.send_message(
+                    chat_id, plain, reply_markup=keyboard
+                )
+                msg_id = (res or {}).get("message_id")
+                return SendResult(success=True, message_id=str(msg_id) if msg_id else None)
+            except Exception as e2:
+                return SendResult(success=False, error=str(e2))
+
+    async def send_clarify(
+        self, chat_id: str, question: str, choices: Optional[list], clarify_id: str,
+        session_key: str, metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+        """Render a clarify prompt with inline buttons like Telegram."""
+        if self._client is None:
+            return SendResult(success=False, error="not connected")
+
+        if not choices:
+            return await self.send(chat_id=chat_id, content=f"❓ {question}", metadata=metadata)
+
+        numbered = [f"{i}. {c}" for i, c in enumerate(choices, start=1)]
+        text = f"❓ **{question}**\n\n" + "\n".join(numbered)
+
+        rows = [[{"text": str(idx + 1), "callback_data": f"cl:{clarify_id}:{idx}"}] for idx in range(len(choices))]
+        rows.append([{"text": "✏️ سایر (پاسخ متنی)", "callback_data": f"cl:{clarify_id}:other"}])
+        keyboard = {"inline_keyboard": rows}
+
+        self._clarify_state[clarify_id] = session_key
+        try:
+            res = await self._client.send_message(
+                chat_id, text, parse_mode=self.parse_mode or None, reply_markup=keyboard
+            )
+            msg_id = (res or {}).get("message_id")
+            return SendResult(success=True, message_id=str(msg_id) if msg_id else None)
+        except Exception:
+            try:
+                plain = self._strip_markdown(text)
+                res = await self._client.send_message(
+                    chat_id, plain, reply_markup=keyboard
+                )
+                msg_id = (res or {}).get("message_id")
+                return SendResult(success=True, message_id=str(msg_id) if msg_id else None)
+            except Exception as e2:
+                return SendResult(success=False, error=str(e2))
+
+    async def _send_exec_approval_prompt(self, prompt: Any) -> SendResult:
+        """Inline-keyboard approval prompt for tool execution like Telegram."""
+        if self._client is None:
+            return SendResult(success=False, error="not connected")
+
+        approval_id = str(next(self._approval_counter))
+        self._approval_state[approval_id] = prompt.session_key
+
+        actions = getattr(prompt, "actions", [])
+        keyboard_buttons = []
+        for item in actions:
+            if isinstance(item, (tuple, list)) and len(item) >= 2:
+                lbl, ch = item[0], item[1]
+                keyboard_buttons.append({"text": str(lbl), "callback_data": f"ea:{ch}:{approval_id}"})
+
+        if not keyboard_buttons:
+            keyboard_buttons = [
+                {"text": "✅ تایید یکباره", "callback_data": f"ea:once:{approval_id}"},
+                {"text": "❌ رد درخواست", "callback_data": f"ea:deny:{approval_id}"},
+            ]
+
+        rows = [keyboard_buttons[i:i + 2] for i in range(0, len(keyboard_buttons), 2)]
+        keyboard = {"inline_keyboard": rows}
+
+        try:
+            res = await self._client.send_message(
+                prompt.chat_id, prompt.text, parse_mode=self.parse_mode or None, reply_markup=keyboard
+            )
+            msg_id = (res or {}).get("message_id")
+            return SendResult(success=True, message_id=str(msg_id) if msg_id else None)
+        except Exception:
+            try:
+                plain = self._strip_markdown(prompt.text)
+                res = await self._client.send_message(
+                    prompt.chat_id, plain, reply_markup=keyboard
+                )
+                msg_id = (res or {}).get("message_id")
+                return SendResult(success=True, message_id=str(msg_id) if msg_id else None)
+            except Exception as e2:
+                return SendResult(success=False, error=str(e2))
+
     async def _handle_callback_query(self, callback_query: dict) -> None:
         cq_id = callback_query.get("id")
         data = str(callback_query.get("data") or "")
@@ -878,6 +1000,12 @@ class BaleAdapter(BasePlatformAdapter):
             await self._handle_choice_picker_callback(callback_query, data, chat_id, msg_id)
         elif data.startswith("db:"):
             await self._handle_dashboard_callback(callback_query, data, chat_id, msg_id)
+        elif data.startswith("sc:"):
+            await self._handle_slash_confirm_callback(cq_id, data, chat_id, msg_id, callback_query.get("from") or {})
+        elif data.startswith("cl:"):
+            await self._handle_clarify_callback(cq_id, data, chat_id, msg_id, callback_query.get("from") or {})
+        elif data.startswith("ea:"):
+            await self._handle_exec_approval_callback(cq_id, data, chat_id, msg_id, callback_query.get("from") or {})
 
     async def _handle_model_picker_callback(self, query: dict, data: str, chat_id: str, msg_id: Any) -> None:
         state = self._model_picker_state.get(str(chat_id))
@@ -913,6 +1041,26 @@ class BaleAdapter(BasePlatformAdapter):
 
         elif data.startswith("mp:"):
             slug = data[3:]
+            if slug == "emergency_free":
+                emergency_models = [
+                    {"id": "openai-fast", "name": "⚡ openai-fast (سریع و سبک)"},
+                    {"id": "gpt-oss-20b", "name": "🧠 gpt-oss-20b (استدلال و برنامه‌نویسی)"},
+                    {"id": "deepseek", "name": "🔍 deepseek (دیپ‌سیک)"},
+                    {"id": "openai", "name": "🌐 openai (عمومی)"},
+                ]
+                state["selected_provider"] = "custom"
+                state["model_list"] = emergency_models
+                keyboard, _ = self._build_model_keyboard(emergency_models, 0, current_model=state.get("current_model", ""))
+                text = (
+                    "🚨 **بخش هوش مصنوعی اضطراری / بدون نیاز به API**\n\n"
+                    "این مدل‌ها کاملاً رایگان هستند و بدون نیاز به کلید یا سهمیه کار می‌کنند.\n\n"
+                    "مدل اضطراری مورد نظر خود را انتخاب کنید:"
+                )
+                await self._client.edit_message_text(
+                    chat_id, msg_id, text, parse_mode=self.parse_mode or None, reply_markup=keyboard
+                )
+                return
+
             p = next((x for x in state.get("providers", []) if str(x.get("slug")) == slug), None)
             if p:
                 models = p.get("models", [])
@@ -960,6 +1108,109 @@ class BaleAdapter(BasePlatformAdapter):
             res_text = f"✓ انتخاب شد: {val}"
         await self._client.edit_message_text(chat_id, msg_id, res_text, parse_mode=self.parse_mode or None, reply_markup=None)
         self._choice_picker_state.pop(str(chat_id), None)
+
+    async def _handle_slash_confirm_callback(self, cq_id: str, data: str, chat_id: str, msg_id: Any, from_user: dict) -> None:
+        parts = data.split(":", 2)
+        if len(parts) != 3:
+            return
+        choice = parts[1]  # once, always, cancel
+        confirm_id = parts[2]
+        session_key = self._slash_confirm_state.pop(confirm_id, None)
+        if not session_key:
+            return
+
+        choice_labels = {
+            "once": "✓ تایید یکباره (Approve Once)",
+            "always": "✓ تایید همیشگی (Always Approve)",
+            "cancel": "✗ لغو شد (Cancelled)",
+        }
+        status_label = choice_labels.get(choice, choice)
+        user_name = from_user.get("first_name") or from_user.get("username") or "کاربر"
+
+        edit_text = f"⚙️ **دستور با موفقیت تعیین تکلیف شد:** {status_label}\nتوسط: {user_name}"
+        try:
+            await self._client.edit_message_text(
+                chat_id, msg_id, edit_text, parse_mode=self.parse_mode or None
+            )
+        except Exception:
+            pass
+
+        try:
+            from tools import slash_confirm as _slash_confirm_mod
+            result_text = await _slash_confirm_mod.resolve(session_key, confirm_id, choice)
+            if result_text:
+                await self.send(chat_id=chat_id, content=result_text)
+        except Exception as exc:
+            logger.error("Bale slash_confirm resolution failed: %s", exc)
+
+    async def _handle_clarify_callback(self, cq_id: str, data: str, chat_id: str, msg_id: Any, from_user: dict) -> None:
+        parts = data.split(":", 2)
+        if len(parts) != 3:
+            return
+        clarify_id = parts[1]
+        token = parts[2]
+        session_key = self._clarify_state.get(clarify_id)
+        if not session_key:
+            return
+
+        user_name = from_user.get("first_name") or from_user.get("username") or "کاربر"
+        if token == "other":
+            try:
+                from tools.clarify_gateway import mark_awaiting_text
+                mark_awaiting_text(clarify_id)
+            except Exception as exc:
+                logger.warning("Bale mark_awaiting_text failed: %s", exc)
+            try:
+                await self._client.edit_message_text(
+                    chat_id, msg_id, "✏️ **لطفاً پاسخ یا توضیح مورد نظر خود را تایپ و ارسال کنید:**"
+                )
+            except Exception:
+                pass
+            return
+
+        self._clarify_state.pop(clarify_id, None)
+        try:
+            idx = int(token)
+            from tools import clarify_gateway as _cg
+            chosen_text = str(idx + 1)
+            entry = _cg._entries.get(clarify_id)
+            if entry and entry.choices and 0 <= idx < len(entry.choices):
+                chosen_text = entry.choices[idx]
+
+            await _cg.resolve_gateway_clarify(clarify_id, chosen_text)
+            await self._client.edit_message_text(
+                chat_id, msg_id, f"✓ گزینه انتخابی: **{chosen_text}** (توسط {user_name})"
+            )
+        except Exception as exc:
+            logger.error("Bale clarify resolution failed: %s", exc)
+
+    async def _handle_exec_approval_callback(self, cq_id: str, data: str, chat_id: str, msg_id: Any, from_user: dict) -> None:
+        parts = data.split(":", 2)
+        if len(parts) != 3:
+            return
+        choice = parts[1]
+        approval_id = parts[2]
+        session_key = self._approval_state.pop(approval_id, None)
+        if not session_key:
+            return
+
+        user_name = from_user.get("first_name") or from_user.get("username") or "کاربر"
+        try:
+            from tools.approval import resolve_gateway_approval
+            resolve_gateway_approval(session_key, choice)
+
+            choice_labels = {
+                "once": "تایید یکباره (Approve Once)",
+                "session": "تایید برای این نشست",
+                "always": "تایید همیشگی",
+                "deny": "رد شد (Denied)",
+            }
+            lbl = choice_labels.get(choice, choice)
+            await self._client.edit_message_text(
+                chat_id, msg_id, f"🛡️ **دستور:** {lbl}\nتوسط: {user_name}"
+            )
+        except Exception as exc:
+            logger.error("Bale exec_approval resolution failed: %s", exc)
 
     async def _handle_dashboard_callback(self, query: dict, data: str, chat_id: str, msg_id: Any) -> None:
         if data == "db:model":

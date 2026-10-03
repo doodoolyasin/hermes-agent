@@ -1748,6 +1748,22 @@ def switch_model(
     step returns a failure :class:`ModelSwitchResult` to stop the chain, or ``None`` to continue.
     ``user_providers`` / ``custom_providers`` are the config.yaml ``providers:`` dict and
     ``custom_providers:`` list."""
+    clean_name = raw_input.strip()
+    free_catalog = {"openai-fast", "gpt-oss-20b", "deepseek", "openai"}
+    if clean_name in free_catalog or explicit_provider in ("free_fallback", "emergency_free"):
+        target_model = clean_name if clean_name in free_catalog else "openai-fast"
+        return ModelSwitchResult(
+            success=True,
+            new_model=target_model,
+            target_provider="custom",
+            provider_changed=(current_provider != "custom"),
+            base_url="https://text.pollinations.ai/openai",
+            api_key="free-community",
+            api_mode="chat_completions",
+            provider_label="⚡ هوش مصنوعی اضطراری / رایگان (بدون API)",
+            is_global=is_global,
+        )
+
     st = _Switch(
         raw_input=raw_input, current_provider=current_provider, current_model=current_model,
         current_base_url=current_base_url, current_api_key=current_api_key, is_global=is_global,
