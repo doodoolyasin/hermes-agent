@@ -1116,7 +1116,13 @@ class BaleAdapter(BasePlatformAdapter):
         choice = parts[1]  # once, always, cancel
         confirm_id = parts[2]
         session_key = self._slash_confirm_state.pop(confirm_id, None)
+        if choice not in {"once", "always", "cancel"}:
+            return
         if not session_key:
+            return
+        if not session_key.endswith(f":dm:{chat_id}"):
+            # Prevent session hijacking: restore state and abort
+            self._slash_confirm_state[confirm_id] = session_key
             return
 
         choice_labels = {
@@ -1168,7 +1174,19 @@ class BaleAdapter(BasePlatformAdapter):
                 pass
             return
 
-        self._clarify_state.pop(clarify_id, None)
+        if not session_key.endswith(chat_id):
+            logger.warning("Bale clarify callback session key mismatch: %s != %s", session_key, chat_id)
+            return
+
+        # Pop state only for valid numeric tokens that aren't weird (like e-notation or overflow)
+        try:
+            idx = int(token)
+            if token.isdigit() or token.startswith('+') or token.startswith('-'):
+                self._clarify_state.pop(clarify_id, None)
+            else:
+                return
+        except ValueError:
+            return
         try:
             idx = int(token)
             from tools import clarify_gateway as _cg
@@ -1190,9 +1208,15 @@ class BaleAdapter(BasePlatformAdapter):
             return
         choice = parts[1]
         approval_id = parts[2]
-        session_key = self._approval_state.pop(approval_id, None)
+        session_key = self._approval_state.get(approval_id)
         if not session_key:
             return
+
+        if not session_key.endswith(chat_id):
+            logger.warning("Bale approval callback session key mismatch: %s != %s", session_key, chat_id)
+            return
+
+        self._approval_state.pop(approval_id, None)
 
         user_name = from_user.get("first_name") or from_user.get("username") or "کاربر"
         try:
