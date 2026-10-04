@@ -1042,22 +1042,37 @@ class BaleAdapter(BasePlatformAdapter):
         elif data.startswith("mp:"):
             slug = data[3:]
             if slug == "emergency_free":
-                emergency_models = [
-                    {"id": "openai-fast", "name": "⚡ openai-fast (سریع و سبک)"},
-                    {"id": "gpt-oss-20b", "name": "🧠 gpt-oss-20b (استدلال و برنامه‌نویسی)"},
-                    {"id": "deepseek", "name": "🔍 deepseek (دیپ‌سیک)"},
-                    {"id": "openai", "name": "🌐 openai (عمومی)"},
-                ]
+                # Live-probed emergency models from the ProviderRadar (shows 🟢/🟡 + real names)
+                try:
+                    from gateway.provider_radar import get_radar
+                    radar = get_radar()
+                    radar.refresh()  # bounded probes; guarded internally
+                    live = radar.picker_models()
+                except Exception:
+                    live = []
+
+                if live:
+                    emergency_models = [{"id": m["id"], "name": m["display"]} for m in live]
+                    body = (
+                        "🚨 **بخش هوش مصنوعی اضطراری (رادار زنده)**\n\n"
+                        "وضعیت لحظه‌ای هر منبع رایگان در کنار دکمه نمایش داده شده است.\n"
+                        "🟢 = در دسترس الان · 🟡 = آخرین بار کار می‌کرد\n\n"
+                        "مدل هدف (نام دقیق) روی هر دکمه آمده است:"
+                    )
+                else:
+                    emergency_models = [
+                        {"id": "openai-fast", "name": "⚡ openai-fast (Pollinations)"},
+                        {"id": "openai", "name": "🌐 openai (Pollinations alias)"},
+                    ]
+                    body = (
+                        "🚨 **بخش هوش مصنوعی اضطراری**\n\n"
+                        "رادار در دسترس نیست؛ گزینه‌های پیش‌فرض رایگان نشان داده می‌شوند:"
+                    )
                 state["selected_provider"] = "custom"
                 state["model_list"] = emergency_models
                 keyboard, _ = self._build_model_keyboard(emergency_models, 0, current_model=state.get("current_model", ""))
-                text = (
-                    "🚨 **بخش هوش مصنوعی اضطراری / بدون نیاز به API**\n\n"
-                    "این مدل‌ها کاملاً رایگان هستند و بدون نیاز به کلید یا سهمیه کار می‌کنند.\n\n"
-                    "مدل اضطراری مورد نظر خود را انتخاب کنید:"
-                )
                 await self._client.edit_message_text(
-                    chat_id, msg_id, text, parse_mode=self.parse_mode or None, reply_markup=keyboard
+                    chat_id, msg_id, body, parse_mode=self.parse_mode or None, reply_markup=keyboard
                 )
                 return
 

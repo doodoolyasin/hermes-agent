@@ -67,9 +67,9 @@ async def test_model_picker_emergency_populates_state_correctly():
     kwargs = adapter._client.edit_message_text.call_args
     text = kwargs[0][2] if kwargs else ""
     assert "بخش هوش مصنوعی اضطراری" in text
-    # 'openai-fast' is in the buttons, not the text body
+    # Model buttons render in the inline keyboard; radar may add status dot + latency/display
     markup = kwargs[1].get("reply_markup", {})
-    buttons = [btn["callback_data"] for row in markup.get("inline_keyboard", []) for btn in row]
-    assert any("mm:0" in b for b in buttons)
+    labels = [btn["text"] for row in markup.get("inline_keyboard", []) for btn in row]
+    assert any("openai-fast" in lbl for lbl in labels), labels
     # correct model list is stored
     assert adapter._model_picker_state["661453305"]["model_list"][0]["id"] == "openai-fast"

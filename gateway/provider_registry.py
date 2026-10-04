@@ -223,5 +223,26 @@ class ProviderRegistry:
             )
         )
 
+        # Inject ProviderRadar live-probed endpoints as dynamic LAN/PUBLIC entries
+        try:
+            from gateway.provider_radar import get_radar
+            radar = get_radar()
+            for e in radar.best_chain(limit=6):
+                if e.base_url and e.name not in self._providers:
+                    self.register(
+                        ProviderDescriptor(
+                            id=f"radar:{e.name}",
+                            name=f"Radar:{e.name}",
+                            tier=ProviderTier.LOCAL if e.tier == "local" else ProviderTier.PUBLIC_COMMUNITY,
+                            base_url=e.base_url,
+                            models=[e.model_hint or "default"],
+                            api_key=e.api_key or None,
+                            is_available=e.reachable,
+                            latency_ms=e.latency_ms,
+                        )
+                    )
+        except Exception as exc:
+            logger.debug("ProviderRadar injection skipped: %s", exc)
+
 
 global_provider_registry = ProviderRegistry()
