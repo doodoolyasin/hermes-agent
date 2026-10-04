@@ -38,6 +38,7 @@ _STATIC_CATALOGUE: list[dict] = [
         "name": "pollinations-text",
         "base_url": "https://text.pollinations.ai/openai",
         "probe": "https://text.pollinations.ai/models",
+        "discover_models_from": "https://text.pollinations.ai/models",
         "api_key": "free-community",
         "model_hint": "openai-fast",
         "tier": "anonymous",
@@ -46,9 +47,19 @@ _STATIC_CATALOGUE: list[dict] = [
         "name": "openrouter-free",
         "base_url": "https://openrouter.ai/api/v1",
         "probe": "https://openrouter.ai/api/v1/models",
+        "discover_models_from": "https://openrouter.ai/api/v1/models",
         "api_key_env": "OPENROUTER_API_KEY",
         "model_hint": "qwen/qwen3.8-27b:free",
         "tier": "keyed-free",
+    },
+    {
+        "name": "voidai-anon",
+        "base_url": "https://api.voidai.app/v1",
+        "probe": "https://api.voidai.app/v1/models",
+        "discover_models_from": "https://api.voidai.app/v1/models",
+        "api_key": "free-community",
+        "model_hint": "gpt-4o-mini",
+        "tier": "anonymous",
     },
 ]
 
@@ -76,6 +87,7 @@ class EndpointHealth:
     last_success: float = 0.0
     success_count: int = 0
     fail_count: int = 0
+    extra_models: list[str] = field(default_factory=list)
 
     @property
     def score(self) -> float:
@@ -143,7 +155,14 @@ class ProviderRadar:
             h.model_hint = c.get("model_hint", h.model_hint)
             if not h.api_key:
                 h.api_key = c.get("api_key", "")
-            ok, lat = self._probe(c.get("probe", c.get("base_url", "")))
+            probe = c.get("probe") or (c.get("base_url", "").rstrip("/") + "/models")
+            h.base_url = c.get("base_url", h.base_url).rstrip("/")
+            ok, lat = self._probe(probe)
+            if ok and c.get("discover_models_from"):
+                live = self._discover_models(c["discover_models_from"])
+                if live:
+                    h.model_hint = live[0]
+                    h.extra_models = live[:6]
             h.reachable = ok
             h.latency_ms = lat
             if ok:
@@ -163,6 +182,26 @@ class ProviderRadar:
         self._save()
         return results
 
+    @staticmethod
+    def _discover_models(url: str, timeout: float = 6.0) -> list[str]:
+        """Fail-safe model listing (Pollinations-style or OpenAI-style /models)."""
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "hermes-radar/1.0"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                data = json.loads(r.read(1 << 16))
+            items = data if isinstance(data, list) else data.get("data") or data.get("models") or []
+            names: list[str] = []
+            for it in items:
+                if isinstance(it, dict):
+                    mid = it.get("name") or it.get("id")
+                    if mid:
+                        names.append(str(mid))
+                elif isinstance(it, str):
+                    names.append(it)
+            return names
+        except Exception:
+            return []
+
     # -- candidates ---------------------------------------------------------
     def all_candidates(self) -> list[dict]:
         import os
@@ -181,17 +220,22 @@ class ProviderRadar:
         entries so a momentarily unreachable favourite still appears in the picker."""
         return sorted(self._health.values(), key=lambda h: (h.reachable, h.score), reverse=True)[:limit]
 
-    def picker_models(self) -> list[dict]:
-        """Entries the Bale/TG emergency picker renders with LIVE probed names."""
+    def picker_models(self, per_endpoint: int = 2) -> list[dict]:
+        """Entries the Bale/TG emergency picker renders with LIVE probed names.
+        Emits up to ``per_endpoint`` models per healthy endpoint so every real
+        target-model name (extra_models or model_hint) is visible as a button."""
         models = []
-        for h in self.best_chain():
-            if h.reachable or h.success_count > 0:
-                tag = "🟢" if h.reachable else "🟡"
+        for h in self.best_chain(limit=8):
+            if not (h.reachable or h.success_count > 0):
+                continue
+            tag = "🟢" if h.reachable else "🟡"
+            names = h.extra_models or ([h.model_hint] if h.model_hint else [h.name])
+            for mid in names[:per_endpoint]:
                 models.append({
-                    "id": h.model_hint or h.name,
+                    "id": mid,
                     "base_url": h.base_url,
                     "api_key": h.api_key,
-                    "display": f"{tag} {h.model_hint or h.name} · {h.name} · {int(h.latency_ms)}ms",
+                    "display": f"{tag} {mid} · {h.name} · {int(h.latency_ms)}ms",
                 })
         return models
 
