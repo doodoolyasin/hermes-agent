@@ -89,6 +89,12 @@ _DOMESTIC_HINTS: list[dict] = [
     {"name": "local-qwen05", "probe": "http://127.0.0.1:8080/health", "base_url": "http://127.0.0.1:8080/v1", "model_hint": "qwen2.5-0.5b-instruct-q2_k.gguf", "tier": "local"},
 ]
 
+# Tier 3: Irancell/MCI internet-degraded mirrors — only resolvable via domestic pipe
+_IRANIAN_MIRRORS: list[dict] = [
+    {"name": "ir-llm.dokcer.local",  "probe": "http://ir-llm.dokcer.local:8080/v1/models", "base_url": "http://ir-llm.dokcer.local:8080/v1"},
+    {"name": "olama.sjcloud.app",    "probe": "http://olama.sjcloud.app:8080/v1/models",   "base_url": "http://olama.sjcloud.app:8080/v1"},
+]
+
 # Dynamic catalogue URL (GitHub-hosted mirror of free endpoints)
 _DYNAMIC_CATALOGUE_URL = "https://raw.githubusercontent.com/cheahjs/free-llm-api-resources/main/README.md"
 
