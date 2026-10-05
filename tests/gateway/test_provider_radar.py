@@ -34,7 +34,9 @@ def test_radar_scores_reachable_first(radar):
     with patch.object(ProviderRadar, "_probe", staticmethod(fake_probe_factory(outcomes))):
         radar.refresh()
     chain = radar.best_chain()
-    assert chain[0].name == "pollinations-text"
+    # both pollinations endpoints (legacy + new turnkey) are in the catalogue and both
+    # contain "pollinations.ai" in the URL, so both are reachable — either may rank first
+    assert chain[0].name in ("pollinations-text", "pollinations-enter")
     assert chain[0].reachable
 
 

@@ -1042,22 +1042,21 @@ class BaleAdapter(BasePlatformAdapter):
         elif data.startswith("mp:"):
             slug = data[3:]
             if slug == "emergency_free":
-                # Live-probed emergency models from the ProviderRadar (shows 🟢/🟡 + real names)
+                # Single coordinated source: ResilienceOrchestrator (radar + local runtimes + last-known-good)
                 try:
-                    from gateway.provider_radar import get_radar
-                    radar = get_radar()
-                    radar.refresh()  # bounded probes; guarded internally
-                    live = radar.picker_models()
+                    from gateway.resilience_orchestrator import get_orchestrator
+                    chain = get_orchestrator().refresh(force=True)
+                    live = chain.picker_buttons()
                 except Exception:
                     live = []
 
                 if live:
-                    emergency_models = [{"id": m["id"], "name": m["display"]} for m in live]
+                    emergency_models = [{"id": b["id"], "name": b["display"]} for b in live]
+                    local_note = "\n🏠 مدل محلی فعال است — در قطعی کامل نیز پاسخ می‌دهد." if chain.offline_runtime_up else ""
                     body = (
                         "🚨 **بخش هوش مصنوعی اضطراری (رادار زنده)**\n\n"
-                        "وضعیت لحظه‌ای هر منبع رایگان در کنار دکمه نمایش داده شده است.\n"
-                        "🟢 = در دسترس الان · 🟡 = آخرین بار کار می‌کرد\n\n"
-                        "مدل هدف (نام دقیق) روی هر دکمه آمده است:"
+                        "🟢 = در دسترس الان · 🟡 = آخرین بار کار می‌کرد · 🏠 = محلی" + local_note + "\n\n"
+                        "نام دقیق مدل هدف روی هر دکمه آمده است:"
                     )
                 else:
                     emergency_models = [

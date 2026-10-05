@@ -61,6 +61,22 @@ _STATIC_CATALOGUE: list[dict] = [
         "model_hint": "gpt-4o-mini",
         "tier": "anonymous",
     },
+    # Pollinations new turnkey API (anonymous tier; succeeds when legacy /v1 saturates)
+    {
+        "name": "pollinations-enter",
+        "base_url": "https://enter.pollinations.ai/api/generate/v1",
+        "probe": "https://enter.pollinations.ai/api/generate/v1/models",
+        "discover_models_from": "https://enter.pollinations.ai/api/generate/v1/models",
+        "api_key": "free-community",
+        "model_hint": "openai-fast",
+        "tier": "anonymous",
+    },
+    # Keyed free tiers — listed only when the matching env var actually exists
+    {"name": "groq-free",       "base_url": "https://api.groq.com/openai/v1",            "probe": "https://api.groq.com/openai/v1/models",              "api_key_env": "GROQ_API_KEY",       "model_hint": "llama-3.3-70b-versatile",                 "tier": "keyed-free"},
+    {"name": "mistral-free",    "base_url": "https://api.mistral.ai/v1",                  "probe": "https://api.mistral.ai/v1/models",                    "api_key_env": "MISTRAL_API_KEY",    "model_hint": "mistral-small-latest",                    "tier": "keyed-free"},
+    {"name": "cerebras-free",   "base_url": "https://api.cerebras.ai/v1",                 "probe": "https://api.cerebras.ai/v1/models",                   "api_key_env": "CEREBRAS_API_KEY",   "model_hint": "llama-4-scout-17b-16e-instruct",          "tier": "keyed-free"},
+    {"name": "google-free",     "base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "probe": "https://generativelanguage.googleapis.com/v1beta/models", "api_key_env": "GEMINI_API_KEY", "model_hint": "gemini-2.0-flash-exp",                  "tier": "keyed-free"},
+    {"name": "huggingface-free","base_url": "https://router.huggingface.co/v1",           "probe": "https://router.huggingface.co/v1/models",             "api_key_env": "HUGGINGFACE_API_KEY","model_hint": "Qwen/Qwen2.5-72B-Instruct",              "tier": "keyed-free"},
 ]
 
 # Tier 2: domestic (Iran-routable) relay hints — resolved lazily; survive international outage
@@ -205,7 +221,17 @@ class ProviderRadar:
     # -- candidates ---------------------------------------------------------
     def all_candidates(self) -> list[dict]:
         import os
-        out = list(_STATIC_CATALOGUE)
+        out: list[dict] = []
+        for c in _STATIC_CATALOGUE:
+            env_name = c.get("api_key_env")
+            if env_name:
+                # Keyed free tier: revealed only when the admin has actually set the key
+                import os as _os
+                api_key = _os.environ.get(env_name, "").strip()
+                if not api_key:
+                    continue
+                c = dict(c, api_key=api_key)
+            out.append(c)
         for h in _DOMESTIC_HINTS:
             if "base_url_env" in h:
                 url = os.environ.get(h["base_url_env"], "").strip()
@@ -223,14 +249,19 @@ class ProviderRadar:
     def picker_models(self, per_endpoint: int = 2) -> list[dict]:
         """Entries the Bale/TG emergency picker renders with LIVE probed names.
         Emits up to ``per_endpoint`` models per healthy endpoint so every real
-        target-model name (extra_models or model_hint) is visible as a button."""
+        target-model name (extra_models or model_hint) is visible as a button.
+        Model ids are globally deduplicated — first (highest-scored) endpoint wins."""
         models = []
+        seen: set[str] = set()
         for h in self.best_chain(limit=8):
             if not (h.reachable or h.success_count > 0):
                 continue
             tag = "🟢" if h.reachable else "🟡"
             names = h.extra_models or ([h.model_hint] if h.model_hint else [h.name])
             for mid in names[:per_endpoint]:
+                if mid in seen:
+                    continue
+                seen.add(mid)
                 models.append({
                     "id": mid,
                     "base_url": h.base_url,
