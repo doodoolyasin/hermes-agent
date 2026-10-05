@@ -63,12 +63,13 @@ def test_picker_models_show_live_names_and_status(radar):
 
 def test_picker_includes_offline_but_previously_good(radar):
     """MODEL MUST STAY VISIBLE for retry: mark OK once, then fail — should appear with 🟡."""
-    with patch.object(ProviderRadar, "_probe", staticmethod(fake_probe_factory({"pollinations": True}))):
+    out_trues = {"text.pollinations.ai": True}
+    with patch.object(ProviderRadar, "_probe", staticmethod(fake_probe_factory(out_trues))):
         radar.refresh()
     with patch.object(ProviderRadar, "_probe", staticmethod(lambda u, t=6.0: (False, 0.0))):
         radar.refresh()
     models = radar.picker_models()
-    poll = next(m for m in models if m["base_url"].endswith("text.pollinations.ai/openai"))
+    poll = next(m for m in models if "text.pollinations.ai" in m["base_url"])
     assert "🟡" in poll["display"]
 
 
