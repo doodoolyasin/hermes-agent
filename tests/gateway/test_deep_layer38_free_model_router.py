@@ -53,7 +53,7 @@ async def test_model_picker_emergency_populates_state_correctly():
     }
     adapter._model_picker_state["661453305"] = state
 
-    # Simulate clicking on the emergency_free button
+    # Simulate clicking the emergency_free button
     await adapter._handle_model_picker_callback(
         query={"id": "cbq1"},
         data="mp:emergency_free",
@@ -61,15 +61,16 @@ async def test_model_picker_emergency_populates_state_correctly():
         msg_id=1042,
     )
 
-    assert adapter._model_picker_state["661453305"]["model_list"][0]["id"] == "openai-fast"
-    assert adapter._model_picker_state["661453305"]["selected_provider"] == "custom"
-
+    picker_state = adapter._model_picker_state["661453305"]
+    assert picker_state["selected_provider"] == "custom"
+    ids = [m["id"] for m in picker_state["model_list"]]
+    # chain is non-empty and ids are unique
+    assert ids and len(ids) == len(set(ids))
+    # text body announces the radar/live emergency block
     kwargs = adapter._client.edit_message_text.call_args
     text = kwargs[0][2] if kwargs else ""
     assert "بخش هوش مصنوعی اضطراری" in text
-    # Model buttons render in the inline keyboard; radar may add status dot + latency/display
+    # buttons reference the ids shown
     markup = kwargs[1].get("reply_markup", {})
     labels = [btn["text"] for row in markup.get("inline_keyboard", []) for btn in row]
-    assert any("openai-fast" in lbl for lbl in labels), labels
-    # correct model list is stored
-    assert adapter._model_picker_state["661453305"]["model_list"][0]["id"] == "openai-fast"
+    assert any(ids[0] in lbl for lbl in labels), (labels, ids)

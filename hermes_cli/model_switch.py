@@ -1749,6 +1749,8 @@ def switch_model(
     ``user_providers`` / ``custom_providers`` are the config.yaml ``providers:`` dict and
     ``custom_providers:`` list."""
     clean_name = raw_input.strip()
+
+    # Free-anonymous catalogue (no key ever needed)
     free_catalog = {"openai-fast", "gpt-oss-20b", "deepseek", "openai"}
     if clean_name in free_catalog or explicit_provider in ("free_fallback", "emergency_free"):
         target_model = clean_name if clean_name in free_catalog else "openai-fast"
@@ -1763,6 +1765,38 @@ def switch_model(
             provider_label="⚡ هوش مصنوعی اضطراری / رایگان (بدون API)",
             is_global=is_global,
         )
+
+    # Dynamic radar-catalogue path: any model id the ResilienceOrchestrator currently
+    # sees across ALL discovered endpoints (anonymous OR keyed-free with env var set OR
+    # local GGUF via the offline runtime) routes straight to that endpoint.
+    try:
+        import os as _os
+        from gateway.provider_radar import get_radar
+        from gateway.provider_radar import _STATIC_CATALOGUE, _DOMESTIC_HINTS
+        candidates = list(_STATIC_CATALOGUE)
+        for c in _DOMESTIC_HINTS:
+            if "base_url_env" in c:
+                v = _os.environ.get(c["base_url_env"], "").strip()
+                if v:
+                    candidates.append({"base_url": v, "model_hint": "", "api_key": ""})
+        for c in candidates:
+            hint = str(c.get("model_hint") or "")
+            names = [hint] + list(c.get("extra_models") or [])
+            if clean_name in [n for n in names if n]:
+                api_key = c.get("api_key") or (_os.environ.get(c.get("api_key_env", ""), "") or "")
+                return ModelSwitchResult(
+                    success=True,
+                    new_model=clean_name,
+                    target_provider="custom",
+                    provider_changed=(current_provider != "custom"),
+                    base_url=c.get("base_url", ""),
+                    api_key=api_key or "free-community",
+                    api_mode="chat_completions",
+                    provider_label=f"رادار: {c.get('name', 'auto')}",
+                    is_global=is_global,
+                )
+    except Exception:
+        pass
 
     st = _Switch(
         raw_input=raw_input, current_provider=current_provider, current_model=current_model,

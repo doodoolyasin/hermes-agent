@@ -85,6 +85,8 @@ _DOMESTIC_HINTS: list[dict] = [
     {"name": "local-ollama", "probe": "http://127.0.0.1:11434/api/tags", "base_url": "http://127.0.0.1:11434/v1", "tier": "local"},
     {"name": "local-llamacpp", "probe": "http://127.0.0.1:8080/v1/models", "base_url": "http://127.0.0.1:8080/v1", "tier": "local"},
     {"name": "local-lmstudio", "probe": "http://127.0.0.1:1234/v1/models", "base_url": "http://127.0.0.1:1234/v1", "tier": "local"},
+    # Demo GGUF server already installed by the operator on this host
+    {"name": "local-qwen05", "probe": "http://127.0.0.1:8080/health", "base_url": "http://127.0.0.1:8080/v1", "model_hint": "qwen2.5-0.5b-instruct-q2_k.gguf", "tier": "local"},
 ]
 
 # Dynamic catalogue URL (GitHub-hosted mirror of free endpoints)
